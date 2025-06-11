@@ -23,13 +23,13 @@ async def txt2img(request: Request):
     # Prepara parâmetros para o subprocesso
     job = {
         "prompt": payload["prompt"],
-        "steps": payload.get("steps", 30),
+        "steps": payload.get("steps", 10),  # valor mais baixo para testes rápidos
         "cfg_scale": payload.get("cfg_scale", 7.5),
         "model": payload.get("model", "runwayml/stable-diffusion-v1-5"),
         "output": output_path
     }
 
-    # Roda o script de geração
+    # Roda o script de geração como subprocesso
     process = subprocess.Popen(
         ["python3", "diffusionapi/generate.py"],
         stdin=subprocess.PIPE,
@@ -40,10 +40,19 @@ async def txt2img(request: Request):
 
     if process.returncode != 0:
         return JSONResponse(
-            content={"error": stderr.decode()},
-            status_code=500
-        )
+        content={
+            "error": "Erro ao gerar imagem",
+            "stderr": stderr.decode(),
+            "stdout": stdout.decode()
+        },
+        status_code=500
+    )
 
+    # Mesmo que não seja erro, exibe o stderr no terminal
+    if stderr:
+        print("LOG do subprocesso:", stderr.decode())
+
+    # Codifica a imagem gerada para base64
     with open(output_path, "rb") as f:
         image_base64 = base64.b64encode(f.read()).decode("utf-8")
 
