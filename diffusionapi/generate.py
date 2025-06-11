@@ -1,18 +1,19 @@
 import sys
 import json
 import os
+import base64
 from pathlib import Path
 from dotenv import load_dotenv
-from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
-from huggingface_hub import snapshot_download
+from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
 import torch
+from PIL import Image
 
-# Load environment variables from .env file
-env_path = Path(__file__).parent.parent / '.env'
+# Load environment variables
+env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 def is_huggingface_model(model_name):
-    return '/' in model_name
+    return "/" in model_name
 
 def is_sdxl_model(model_name):
     sdxl_indicators = ["sdxl", "xl-", "-xl"]
@@ -20,14 +21,19 @@ def is_sdxl_model(model_name):
 
 def resolve_model_path(model_name):
     if is_huggingface_model(model_name):
-        return snapshot_download(model_name, local_dir_use_symlinks=False)
+        return model_name
     models_dir = os.getenv("MODELS_DIR", "stable_diffusion/models")
     return os.path.join(models_dir, model_name)
 
+def update_progress_file(job_id, content):
+    os.makedirs("queue", exist_ok=True)
+    with open(f"queue/{job_id}.json", "w") as f:
+        json.dump(content, f)
+
 def main():
     data = json.load(sys.stdin)
-    print("Received data:", json.dumps(data, indent=2))
 
+    job_id = data.get("job_id", "unknown")
     prompt = data["prompt"]
     steps = data.get("steps", 30)
     cfg_scale = data.get("cfg_scale", 7.5)
@@ -39,68 +45,89 @@ def main():
     device = "mps" if torch.backends.mps.is_available() else "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if device != "cpu" else torch.float32
 
+    update_progress_file(job_id, {"status": "loading", "progress": 0.0})
+
     model_id = resolve_model_path(model_name)
-    print(f"Loading model: {model_id}")
-    print(f"Device: {device}, dtype: {dtype}")
 
     try:
         if is_sdxl_model(model_name):
-            print("🧠 Using SDXL pipeline")
             pipe = StableDiffusionXLPipeline.from_pretrained(
                 model_id,
                 torch_dtype=dtype,
                 use_safetensors=True,
-                safety_checker=None,
-            ).to(device)
+                safety_checker=None
+            )
 
-            # Optional refiner
-            refiner_name = data.get("refiner_checkpoint")
-            refiner_switch = data.get("refiner_switch_at", 0.8)
+            refiner_id = data.get("refiner_checkpoint")
+            switch_at = data.get("refiner_switch_at", 0.8)
 
-            if refiner_name:
-                refiner_path = resolve_model_path(refiner_name)
-                print(f"🔧 Loading refiner: {refiner_path} (switch at {refiner_switch})")
-                refiner = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+            if refiner_id:
+                refiner_path = resolve_model_path(refiner_id)
+                refiner = StableDiffusionXLPipeline.from_pretrained(
                     refiner_path,
                     torch_dtype=dtype,
                     use_safetensors=True,
-                    variant="fp16" if dtype == torch.float16 else None,
-                ).to(device)
-
+                    safety_checker=None
+                )
                 pipe.refiner = refiner
-                pipe.refiner_switch_at = float(refiner_switch)
-                print("✅ Refiner attached")
+                pipe.refiner_inference_steps = int(steps * (1 - switch_at))
 
-            image = pipe(
-                prompt=prompt,
-                num_inference_steps=steps,
-                guidance_scale=cfg_scale,
-                width=width,
-                height=height
-            ).images[0]
+                # Só ativa offload se estiver usando CUDA
+                if device == "cuda":
+                    pipe.enable_sequential_cpu_offload()
 
         else:
-            print("🧠 Using standard Stable Diffusion pipeline")
             pipe = StableDiffusionPipeline.from_pretrained(
                 model_id,
                 torch_dtype=dtype,
                 use_safetensors=True,
                 safety_checker=None
-            ).to(device)
+            )
 
-            image = pipe(
-                prompt=prompt,
-                num_inference_steps=steps,
-                guidance_scale=cfg_scale,
-                width=width,
-                height=height
-            ).images[0]
+        pipe = pipe.to(device)
+
+        def callback(i, t, latents):
+            progress = round((i + 1) / steps, 2)
+            update_progress_file(job_id, {
+                "status": "processing",
+                "progress": progress
+            })
+
+        image = pipe(
+            prompt=prompt,
+            num_inference_steps=steps,
+            guidance_scale=cfg_scale,
+            width=width,
+            height=height,
+            callback=callback,
+            callback_steps=1
+        ).images[0]
 
         image.save(output_path)
-        print(f"✅ Image saved to: {output_path}")
+
+        with open(output_path, "rb") as f:
+            image_b64 = base64.b64encode(f.read()).decode("utf-8")
+
+        update_progress_file(job_id, {
+            "status": "done",
+            "progress": 1.0,
+            "image": image_b64,
+            "job_id": job_id,
+            "output_path": output_path,
+            "width": width,
+            "height": height,
+            "steps": steps,
+            "cfg_scale": cfg_scale,
+            "model": model_name,
+            "prompt": prompt
+        })
 
     except Exception as e:
-        print(f"❌ Error details: {str(e)}")
+        update_progress_file(job_id, {
+            "status": "error",
+            "progress": 0,
+            "detail": str(e)
+        })
         raise
 
 if __name__ == "__main__":
