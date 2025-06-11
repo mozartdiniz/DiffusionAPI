@@ -31,20 +31,60 @@ async def txt2img(request: Request):
     model_name = payload.get("model", "stable-diffusion-v1-5")
     print(f"Using model: {model_name}")  # Debug print
 
-    # Prepara parâmetros para o subprocesso
+    # Prepare parameters with all supported options from the API definition
     job = {
-        "prompt": payload["prompt"],
-        "steps": payload.get("steps", 10),  # valor mais baixo para testes rápidos
-        "cfg_scale": payload.get("cfg_scale", 7.5),
-        "model": model_name,  # Use the model name directly
-        "output": output_path,
+        "prompt": payload.get("prompt", ""),
+        "negative_prompt": payload.get("negative_prompt", ""),
+        "styles": payload.get("styles", []),
+        "seed": payload.get("seed", -1),
+        "subseed": payload.get("subseed", -1),
+        "subseed_strength": payload.get("subseed_strength", 0),
+        "seed_resize_from_h": payload.get("seed_resize_from_h", -1),
+        "seed_resize_from_w": payload.get("seed_resize_from_w", -1),
+        "sampler_name": payload.get("sampler_name"),
+        "scheduler": payload.get("scheduler"),
+        "batch_size": payload.get("batch_size", 1),
+        "n_iter": payload.get("n_iter", 1),
+        "steps": payload.get("steps", 50),
+        "cfg_scale": payload.get("cfg_scale", 7.0),
         "width": payload.get("width", 512),
-        "height": payload.get("height", 512)
+        "height": payload.get("height", 512),
+        "restore_faces": payload.get("restore_faces"),
+        "tiling": payload.get("tiling"),
+        "do_not_save_samples": payload.get("do_not_save_samples", False),
+        "do_not_save_grid": payload.get("do_not_save_grid", False),
+        "eta": payload.get("eta"),
+        "denoising_strength": payload.get("denoising_strength"),
+        "s_min_uncond": payload.get("s_min_uncond"),
+        "s_churn": payload.get("s_churn"),
+        "s_tmax": payload.get("s_tmax"),
+        "s_tmin": payload.get("s_tmin"),
+        "s_noise": payload.get("s_noise"),
+        "override_settings": payload.get("override_settings"),
+        "override_settings_restore_afterwards": payload.get("override_settings_restore_afterwards", True),
+        "refiner_checkpoint": payload.get("refiner_checkpoint"),
+        "refiner_switch_at": payload.get("refiner_switch_at"),
+        "disable_extra_networks": payload.get("disable_extra_networks", False),
+        "firstpass_image": payload.get("firstpass_image"),
+        "comments": payload.get("comments"),
+        "enable_hr": payload.get("enable_hr", False),
+        "firstphase_width": payload.get("firstphase_width", 0),
+        "firstphase_height": payload.get("firstphase_height", 0),
+        "hr_scale": payload.get("hr_scale", 2.0),
+        "hr_upscaler": payload.get("hr_upscaler"),
+        "hr_second_pass_steps": payload.get("hr_second_pass_steps", 0),
+        "hr_resize_x": payload.get("hr_resize_x", 0),
+        "hr_resize_y": payload.get("hr_resize_y", 0),
+        "model": model_name,
+        "output": output_path
     }
+
+    # Remove None values to keep the payload clean
+    job = {k: v for k, v in job.items() if v is not None}
 
     print("Sending to generate.py:", json.dumps(job, indent=2))  # Debug print
 
-    # Roda o script de geração como subprocesso
+    # Run the generation script as subprocess
     process = subprocess.Popen(
         ["python3", "diffusionapi/generate.py"],
         stdin=subprocess.PIPE,
@@ -62,19 +102,35 @@ async def txt2img(request: Request):
     if process.returncode != 0:
         return JSONResponse(
             content={
-                "error": "Erro ao gerar imagem",
+                "error": "Error generating image",
                 "stderr": stderr.decode(),
                 "stdout": stdout.decode()
             },
             status_code=500
         )
 
-    # Codifica a imagem gerada para base64
+    # Encode the generated image to base64
     with open(output_path, "rb") as f:
         image_base64 = base64.b64encode(f.read()).decode("utf-8")
 
+    # Return response matching the API definition
     return {
         "images": [image_base64],
         "parameters": payload,
-        "info": json.dumps({"seed": payload.get("seed", -1)})
+        "info": json.dumps({
+            "seed": payload.get("seed", -1),
+            "subseed": payload.get("subseed", -1),
+            "subseed_strength": payload.get("subseed_strength", 0),
+            "width": payload.get("width", 512),
+            "height": payload.get("height", 512),
+            "sampler_name": payload.get("sampler_name"),
+            "cfg_scale": payload.get("cfg_scale", 7.0),
+            "steps": payload.get("steps", 50),
+            "batch_size": payload.get("batch_size", 1),
+            "n_iter": payload.get("n_iter", 1),
+            "prompt": payload.get("prompt", ""),
+            "negative_prompt": payload.get("negative_prompt", ""),
+            "styles": payload.get("styles", []),
+            "model": model_name
+        })
     }
