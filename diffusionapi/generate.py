@@ -2,10 +2,12 @@ import sys
 import json
 import os
 import base64
+import time
 from pathlib import Path
 from dotenv import load_dotenv
 from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
 import torch
+import psutil
 from PIL import Image
 
 # Load environment variables
@@ -30,6 +32,10 @@ def update_progress_file(job_id, content):
     with open(f"queue/{job_id}.json", "w") as f:
         json.dump(content, f)
 
+def log_memory():
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / (1024 * 1024)  # In MB
+
 def main():
     data = json.load(sys.stdin)
 
@@ -46,10 +52,12 @@ def main():
     dtype = torch.float16 if device != "cpu" else torch.float32
 
     update_progress_file(job_id, {"status": "loading", "progress": 0.0})
-
     model_id = resolve_model_path(model_name)
 
     try:
+        memory_before = log_memory()
+        start_time = time.time()
+
         if is_sdxl_model(model_name):
             pipe = StableDiffusionXLPipeline.from_pretrained(
                 model_id,
@@ -72,10 +80,8 @@ def main():
                 pipe.refiner = refiner
                 pipe.refiner_inference_steps = int(steps * (1 - switch_at))
 
-                # Só ativa offload se estiver usando CUDA
                 if device == "cuda":
                     pipe.enable_sequential_cpu_offload()
-
         else:
             pipe = StableDiffusionPipeline.from_pretrained(
                 model_id,
@@ -108,6 +114,9 @@ def main():
         with open(output_path, "rb") as f:
             image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+        duration = time.time() - start_time
+        memory_after = log_memory()
+
         update_progress_file(job_id, {
             "status": "done",
             "progress": 1.0,
@@ -119,7 +128,10 @@ def main():
             "steps": steps,
             "cfg_scale": cfg_scale,
             "model": model_name,
-            "prompt": prompt
+            "prompt": prompt,
+            "memory_before_mb": round(memory_before, 2),
+            "memory_after_mb": round(memory_after, 2),
+            "generation_time_sec": round(duration, 2)
         })
 
     except Exception as e:

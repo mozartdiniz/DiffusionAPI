@@ -20,13 +20,43 @@ async def hello():
     return {"ok": True}
 
 @app.get("/queue/{job_id}")
-async def get_queue_status(job_id: str):
-    job_path = QUEUE_DIR / f"{job_id}.json"
-    if not job_path.exists():
-        return JSONResponse(content={"status": "not_found"}, status_code=404)
+def get_job_status(job_id: str):
+    path = f"queue/{job_id}.json"
 
-    with open(job_path, "r") as f:
+    # Se o job ainda não existir, retornamos status "empty"
+    if not os.path.exists(path):
+        return {
+            "status": "empty",
+            "progress": 0.0,
+            "job_id": job_id
+        }
+
+    with open(path, "r") as f:
         data = json.load(f)
+
+    # Se estiver finalizado e tiver uma imagem, retornamos uma cópia e limpamos
+    if data.get("status") == "done" and "image" in data:
+        full_data = dict(data)
+        del data["image"]
+
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        return full_data
+    else:
+        return data
+
+    # Se estiver finalizado e tiver uma imagem, retornamos uma cópia e limpamos
+    if data.get("status") == "done" and "image" in data:
+        full_data = dict(data)  # copia
+        del data["image"]
+
+        # Salva o json limpo no disco
+        with open(path, "w") as f:
+            json.dump(data, f)
+
+        return full_data  # retorna a versão com image
+    else:
         return data
 
 @app.post("/sdapi/v1/txt2img")
