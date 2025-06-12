@@ -36,18 +36,6 @@ def get_job_status(job_id: str):
 
     # Se estiver finalizado e tiver uma imagem, retornamos uma cópia e limpamos
     if data.get("status") == "done" and "image" in data:
-        full_data = dict(data)
-        del data["image"]
-
-        with open(path, "w") as f:
-            json.dump(data, f)
-
-        return full_data
-    else:
-        return data
-
-    # Se estiver finalizado e tiver uma imagem, retornamos uma cópia e limpamos
-    if data.get("status") == "done" and "image" in data:
         full_data = dict(data)  # copia
         del data["image"]
 
@@ -58,6 +46,7 @@ def get_job_status(job_id: str):
         return full_data  # retorna a versão com image
     else:
         return data
+
 
 @app.post("/sdapi/v1/txt2img")
 async def txt2img(request: Request):
