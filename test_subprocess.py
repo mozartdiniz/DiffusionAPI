@@ -2,7 +2,7 @@ import subprocess
 import json
 
 payload = {
-    "prompt": "a test image",
+    "prompt": "a beautiful green forest with a river and a waterfall",
     "steps": 10,
     "cfg_scale": 7,
     "model": "John6666__amanatsu-illustrious-v11-sdxl",  # nome da pasta local do modelo
@@ -13,7 +13,7 @@ payload = {
 }
 
 process = subprocess.Popen(
-    ["python3", "diffusionapi/generate.py"],
+    ["python3", "-m", "diffusionapi.generate"],
     stdin=subprocess.PIPE,
     stdout=subprocess.PIPE,
     stderr=subprocess.PIPE,

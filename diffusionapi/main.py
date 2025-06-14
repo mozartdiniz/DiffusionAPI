@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
+import threading
 
 # Configura logger
 log_path = Path("server.log")
@@ -85,8 +86,25 @@ async def txt2img(request: Request):
         "refiner_checkpoint": payload.get("refiner_checkpoint"),
         "refiner_switch_at": payload.get("refiner_switch_at", 0.8),
         "output": output_path,
-        "loras": normalized_loras
+        "loras": normalized_loras,
+        "sampler_name": payload.get("sampler_name", "DPM++ 2M Karras"),
+        "scheduler_type": payload.get("scheduler_type", "karras")
     }
+    
+    hires = payload.get("hires")
+    
+    logger.info("Before hires")
+    
+    if isinstance(hires, dict) and hires.get("enabled"):
+        job["hires"] = {
+            "enabled": True,
+            "scale": float(hires.get("scale", 2.0)),
+            "upscaler": hires.get("upscaler", "Latent"),
+            "steps": int(hires.get("steps", 20)),
+            "denoising_strength": float(hires.get("denoising_strength", 0.4))
+        }
+
+    logger.info("After hires")
 
     job = {k: v for k, v in job.items() if v is not None}
 
@@ -94,15 +112,31 @@ async def txt2img(request: Request):
         json.dump({"status": "queued", "progress": 0.0, "job_id": job_id}, f)
 
     try:
+        logger.info("Before subprocess")
         proc = subprocess.Popen(
-            ["python3", "diffusionapi/generate.py"],
+            ["python3", "-m", "diffusionapi.generate"],
             stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True
         )
+        logger.info("After subprocess")
         proc.stdin.write(json.dumps(job))
         proc.stdin.close()
+        logger.info("After stdin")
+
+        # Start a thread to read and log the output
+        def log_output(pipe, prefix):
+            for line in pipe:
+                logger.info(f"{prefix}: {line.strip()}")
+
+        stdout_thread = threading.Thread(target=log_output, args=(proc.stdout, "STDOUT"))
+        stderr_thread = threading.Thread(target=log_output, args=(proc.stderr, "STDERR"))
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        stdout_thread.start()
+        stderr_thread.start()
+
         logger.info(f"Job {job_id} dispatched to subprocess.")
     except Exception as e:
         logger.exception(f"Failed to start subprocess for job {job_id}")
