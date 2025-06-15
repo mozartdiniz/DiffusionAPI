@@ -6,6 +6,7 @@ import time
 import psutil
 from pathlib import Path
 from dotenv import load_dotenv
+from typing import List, Dict, Any
 
 import logging
 
@@ -13,13 +14,13 @@ from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
 from PIL import Image
 import torch
 
-# External upscaling helper (fallback for exotic models)
+# Use our new upscaler implementation
 from .upscalers import upscale_image
 
 # NEW: Real‑ESRGAN support for colour‑safe AnimeSharp & friends
-from realesrgan import RealESRGANer
-from basicsr.archs.rrdbnet_arch import RRDBNet
-import cv2
+# from realesrgan import RealESRGANer
+# from basicsr.archs.rrdbnet_arch import RRDBNet
+# import cv2
 import numpy as np
 
 ###############################################################################
@@ -70,6 +71,11 @@ def update_progress_file(job_id: str, content: dict) -> None:
 def get_memory_usage() -> float:
     return round(psutil.Process(os.getpid()).memory_info().rss / 1024 / 1024, 2)
 
+
+def round_to_multiple_of_8(value: int) -> int:
+    """Round a value to the nearest multiple of 8."""
+    return round(value / 8) * 8
+
 ###############################################################################
 # Main entry
 ###############################################################################
@@ -98,11 +104,14 @@ def main() -> None:
     cfg_scale = float(data.get("cfg_scale", 7.0))
     model_name = data.get("model", "stable-diffusion-v1-5")
     output_path = data.get("output")
-    width = int(data.get("width", 512))
-    height = int(data.get("height", 512))
+    # Round initial dimensions to multiple of 8
+    width = round_to_multiple_of_8(int(data.get("width", 512)))
+    height = round_to_multiple_of_8(int(data.get("height", 512)))
     hires_cfg = data.get("hires", {}) or {}
     loras = data.get("loras", [])
     sampler_name = data.get("sampler_name", "DPM++ 2M Karras")
+
+    logger.info(f"Initial dimensions (rounded to multiple of 8): {width}x{height}")
 
     # ------------------------------------------------------------------
     # 2.  Device & dtype
@@ -223,23 +232,40 @@ def main() -> None:
     # 5.  Callback to update progress
     # ------------------------------------------------------------------
     def callback(i, t, latents):
-        progress = round((i + 1) / steps, 2)
-        update_progress_file(job_id, {"status": "processing", "progress": progress})
-
+        if hires_enabled:
+            # For hires, we need to track which phase we're in
+            if not hasattr(callback, 'phase'):
+                callback.phase = 'initial'
+            
+            if callback.phase == 'initial':
+                # Initial generation phase (0-50%)
+                progress = round((i + 1) / steps * 0.5, 2)
+                update_progress_file(job_id, {
+                    "status": "processing",
+                    "progress": progress,
+                    "phase": "initial generation"
+                })
+            else:
+                # Upscaling phase (50-100%)
+                progress = 0.5 + round((i + 1) / hires_steps * 0.5, 2)
+                update_progress_file(job_id, {
+                    "status": "processing",
+                    "progress": progress,
+                    "phase": "upscaling"
+                })
+        else:
+            # Normal generation (0-100%)
+            progress = round((i + 1) / steps, 2)
+            update_progress_file(job_id, {
+                "status": "processing",
+                "progress": progress,
+                "phase": "generation"
+            })
 
     # ------------------------------------------------------------------
     # 6.  Load LoRAs (optional)
     # ------------------------------------------------------------------
-    if loras:
-        logger.info("==> Loading %d LoRAs", len(loras))
-        for lora in loras:
-            lora_path = os.path.join(LORAS_DIR, lora["name"])
-            if not os.path.exists(lora_path):
-                raise FileNotFoundError(f"LoRA file not found: {lora_path}")
-            logger.info("   ↳ %s (scale %.2f)", lora_path, lora.get("scale", 1.0))
-            pipe.load_lora_weights(lora_path, weight_name=None)
-            if hasattr(pipe, "set_adapters"):
-                pipe.set_adapters(["default"], adapter_weights={"default": lora.get("scale", 1.0)})
+    load_loras(pipe, loras)
 
     # ------------------------------------------------------------------
     # 7.  Generation (single-pass OR hires-fix)
@@ -272,6 +298,7 @@ def main() -> None:
         denoising_strength = float(hires_cfg.get("denoising_strength", 0.4))
 
         # 7a. Generate base image (low-res)
+        callback.phase = 'initial'  # Set initial phase
         lowres_image = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -286,7 +313,13 @@ def main() -> None:
         # 7b. Upscale – latent or external
         if upscaler_name.lower() == "latent":
             logger.info("   ↳ Latent upscaling %sx, denoise %.2f", scale, denoising_strength)
+            # Calculate target dimensions and round to multiple of 8
+            target_width = round_to_multiple_of_8(int(width * scale))
+            target_height = round_to_multiple_of_8(int(height * scale))
+            logger.info(f"   ↳ Target dimensions (rounded to multiple of 8): {target_width}x{target_height}")
+            
             pipe.enable_vae_tiling()
+            callback.phase = 'upscaling'  # Set upscaling phase
             image = pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -294,12 +327,31 @@ def main() -> None:
                 strength=denoising_strength,
                 num_inference_steps=hires_steps,
                 guidance_scale=cfg_scale,
+                width=target_width,
+                height=target_height,
                 callback=callback,
                 callback_steps=1,
             ).images[0]
         else:
             logger.info("   ↳ External upscaler '%s' (%sx)", upscaler_name, scale)
+            # Debug logging for input image
+            lowres_array = np.array(lowres_image)
+            logger.info(f"Lowres image before upscale - shape: {lowres_array.shape}, dtype: {lowres_array.dtype}")
+            logger.info(f"Lowres image range - min: {lowres_array.min()}, max: {lowres_array.max()}, mean: {lowres_array.mean():.2f}")
+            logger.info(f"Lowres image mode: {lowres_image.mode}")
+            
+            # Check if image is grayscale
+            if len(lowres_array.shape) == 2 or (len(lowres_array.shape) == 3 and lowres_array.shape[2] == 1):
+                logger.warning("Input image appears to be grayscale! Converting to RGB...")
+                lowres_image = lowres_image.convert('RGB')
+            
             image = upscale_image(lowres_image, scale=scale, upscaler_name=upscaler_name)
+            
+            # Debug logging for output image
+            upscaled_array = np.array(image)
+            logger.info(f"Upscaled image after upscale - shape: {upscaled_array.shape}, dtype: {upscaled_array.dtype}")
+            logger.info(f"Upscaled image range - min: {upscaled_array.min()}, max: {upscaled_array.max()}, mean: {upscaled_array.mean():.2f}")
+            logger.info(f"Upscaled image mode: {image.mode}")
 
     # ------------------------------------------------------------------
     # 8.  Final bookkeeping
@@ -310,7 +362,17 @@ def main() -> None:
 
     # Save & base64
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    image.save(output_path)
+    
+    # Get file type and quality settings from job
+    file_type = data.get("file_type", "jpg")
+    jpeg_quality = data.get("jpeg_quality", 85)
+    
+    # Save image with appropriate settings
+    if file_type == "jpg":
+        image.save(output_path, "JPEG", quality=jpeg_quality, optimize=True)
+    else:  # PNG
+        image.save(output_path, "PNG", optimize=True)
+    
     with open(output_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
@@ -320,6 +382,8 @@ def main() -> None:
         "image": image_b64,
         "job_id": job_id,
         "output_path": output_path,
+        "file_type": file_type,
+        "jpeg_quality": jpeg_quality if file_type == "jpg" else None,
         "width": image.width,
         "height": image.height,
         "steps": steps,
@@ -333,6 +397,36 @@ def main() -> None:
     })
 
     logger.info("==> Job %s finished in %.2fs (mem %.1f → %.1f MB)", job_id, elapsed_time, memory_before, memory_after)
+
+
+def load_loras(pipeline, loras: List[Dict[str, Any]]) -> None:
+    """Load LoRAs into the pipeline."""
+    if not loras:
+        return
+
+    logger.info(f"==> Loading {len(loras)} LoRAs")
+    for lora in loras:
+        try:
+            lora_name = lora["name"]
+            lora_scale = lora["scale"]
+            # Ensure we have the .safetensors extension
+            lora_path = Path(lora["path"])
+            if not lora_path.suffix:
+                lora_path = lora_path.with_suffix(".safetensors")
+            
+            if not lora_path.exists():
+                raise FileNotFoundError(f"LoRA file not found: {lora_path}")
+            
+            logger.info(f"   ↳ Loading LoRA '{lora_name}' with scale {lora_scale}")
+            pipeline.load_lora_weights(
+                lora_path,
+                weight_name="pytorch_lora_weights.safetensors",
+                adapter_name=lora_name
+            )
+            pipeline.fuse_lora(adapter_name=lora_name, scale=lora_scale)
+        except Exception as e:
+            logger.exception(f"Failed to load LoRA {lora_name}")
+            raise RuntimeError(f"LoRA error: {str(e)}")
 
 
 if __name__ == "__main__":

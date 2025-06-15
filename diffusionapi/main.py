@@ -7,6 +7,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 import logging
 import threading
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from diffusionapi.upscalers import INTERNAL_UPSCALERS, UPSCALER_DIR
 
 # Configura logger
 log_path = Path("server.log")
@@ -25,42 +29,115 @@ env_path = Path(__file__).parent.parent / '.env'
 load_dotenv(env_path)
 
 app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Constants
 QUEUE_DIR = Path("queue")
-QUEUE_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR = Path("outputs")
+MODELS_DIR = Path("stable_diffusion/models")
+LORAS_DIR = Path("stable_diffusion/loras")
+
+# Ensure directories exist
+QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+MODELS_DIR.mkdir(parents=True, exist_ok=True)
+LORAS_DIR.mkdir(parents=True, exist_ok=True)
 
 @app.get("/hello")
 async def hello():
     return {"ok": True}
 
-@app.get("/queue/{job_id}")
-def get_job_status(job_id: str):
-    path = f"queue/{job_id}.json"
-
-    if not os.path.exists(path):
-        return {
-            "status": "empty",
-            "progress": 0.0,
-            "job_id": job_id
+@app.get("/sdapi/v1/queue/{job_id}")
+async def get_queue_status(job_id: str):
+    """Get the status of a specific job."""
+    try:
+        # Read the progress file
+        progress_file = QUEUE_DIR / f"{job_id}.json"
+        if not progress_file.exists():
+            return JSONResponse(
+                status_code=404,
+                content={"status": "error", "detail": f"Job {job_id} not found"}
+            )
+        
+        with open(progress_file) as f:
+            data = json.load(f)
+        
+        # Get the job data to check if hires is enabled
+        job_file = QUEUE_DIR / f"{job_id}_job.json"
+        hires_enabled = False
+        if job_file.exists():
+            with open(job_file) as f:
+                job_data = json.load(f)
+                hires_enabled = job_data.get("hires", {}).get("enabled", False)
+        
+        # Calculate progress based on status and hires
+        status = data.get("status", "unknown")
+        progress = data.get("progress", 0.0)
+        phase = data.get("phase", "generation")
+        
+        # For hires, we have two phases:
+        # Phase 1 (0-50%): Initial generation
+        # Phase 2 (50-100%): Upscaling
+        if hires_enabled and status == "processing":
+            # Use the phase from the progress file
+            current_phase = phase
+            # Progress is already scaled correctly in generate.py
+            progress = progress * 100  # Convert to percentage
+        else:
+            # Normal generation or other status
+            current_phase = phase if status == "processing" else status
+            progress = progress * 100  # Convert to percentage
+        
+        # Ensure progress is between 0 and 100
+        progress = max(0, min(100, progress))
+        
+        response = {
+            "status": "success",
+            "job_id": job_id,
+            "progress": round(progress, 2),
+            "current_phase": current_phase,
+            "state": status,
+            "error": data.get("detail")
         }
-
-    with open(path, "r") as f:
-        data = json.load(f)
-
-    if data.get("status") == "done" and "image" in data:
-        full_data = dict(data)
-        del data["image"]
-        with open(path, "w") as f:
-            json.dump(data, f)
-        return full_data
-    else:
-        return data
+        
+        # Add image data if available
+        if "image" in data:
+            response["image"] = data["image"]
+            response["output_path"] = data.get("output_path")
+            response["width"] = data.get("width")
+            response["height"] = data.get("height")
+        
+        return response
+        
+    except Exception as e:
+        logger.exception(f"Failed to get status for job {job_id}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
 
 @app.post("/sdapi/v1/txt2img")
 async def txt2img(request: Request):
     payload = await request.json()
     job_id = str(uuid.uuid4())
-    output_path = str(Path("outputs") / f"{job_id}.png")
+    
+    # Get file type from payload, default to jpg
+    file_type = payload.get("fileType", "jpg").lower()
+    if file_type not in ["png", "jpg"]:
+        file_type = "jpg"
+    
+    # Set output path with correct extension
+    output_path = str(Path("outputs") / f"{job_id}.{file_type}")
 
+    # Handle loras
     loras = payload.get("loras", [])
     if not isinstance(loras, list):
         loras = []
@@ -68,10 +145,33 @@ async def txt2img(request: Request):
     normalized_loras = []
     for entry in loras:
         if isinstance(entry, dict) and "name" in entry:
+            # Get the lora name and verify it exists
+            lora_name = entry["name"]
+            lora_path = LORAS_DIR / f"{lora_name}.safetensors"
+            
+            if not lora_path.exists():
+                logger.warning(f"LoRA not found: {lora_name}")
+                continue
+                
             normalized_loras.append({
-                "name": entry["name"],
+                "name": lora_name,
+                "path": str(lora_path),
                 "scale": float(entry.get("scale", 1.0))
             })
+        elif isinstance(entry, str):
+            # Handle simple string lora names
+            lora_path = LORAS_DIR / f"{entry}.safetensors"
+            
+            if not lora_path.exists():
+                logger.warning(f"LoRA not found: {entry}")
+                continue
+                
+            normalized_loras.append({
+                "name": entry,
+                "path": str(lora_path),
+                "scale": 1.0
+            })
+
     payload["loras"] = normalized_loras
 
     job = {
@@ -86,6 +186,8 @@ async def txt2img(request: Request):
         "refiner_checkpoint": payload.get("refiner_checkpoint"),
         "refiner_switch_at": payload.get("refiner_switch_at", 0.8),
         "output": output_path,
+        "file_type": file_type,
+        "jpeg_quality": payload.get("jpeg_quality", 85),
         "loras": normalized_loras,
         "sampler_name": payload.get("sampler_name", "DPM++ 2M Karras"),
         "scheduler_type": payload.get("scheduler_type", "karras")
@@ -153,3 +255,158 @@ async def txt2img(request: Request):
         "job_id": job_id,
         "status": "queued"
     }
+
+@app.get("/sdapi/v1/models")
+async def list_models():
+    """List all available models."""
+    try:
+        # Set to store unique model names
+        model_names = set()
+        
+        # Look for model directories
+        for model_dir in MODELS_DIR.iterdir():
+            if model_dir.is_dir():
+                # Check if this is a valid model directory by looking for unet component
+                if any(model_dir.glob("**/unet/diffusion_pytorch_model.safetensors")):
+                    # Get the model name and normalize it
+                    model_name = model_dir.name.replace("__", "/")  # Convert double underscore to slash
+                    model_names.add(model_name)
+        
+        # Convert to sorted list
+        models = [{"name": name} for name in sorted(model_names)]
+        
+        if not models:
+            logger.warning(f"No models found in {MODELS_DIR}")
+        
+        return {
+            "status": "success",
+            "models": models
+        }
+    except Exception as e:
+        logger.exception(f"Failed to list models from {MODELS_DIR}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
+
+@app.get("/sdapi/v1/loras")
+async def list_loras():
+    """List all available LoRAs."""
+    try:
+        # Set to store unique lora names
+        lora_names = set()
+        
+        # Look for .safetensors files in the loras directory
+        for lora_path in LORAS_DIR.glob("*.safetensors"):
+            # Get the lora name without extension
+            lora_name = lora_path.stem
+            lora_names.add(lora_name)
+        
+        # Convert to sorted list
+        loras = [{"name": name} for name in sorted(lora_names)]
+        
+        if not loras:
+            logger.warning(f"No loras found in {LORAS_DIR}")
+        
+        return {
+            "status": "success",
+            "loras": loras
+        }
+    except Exception as e:
+        logger.exception(f"Failed to list loras from {LORAS_DIR}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
+
+@app.get("/sdapi/v1/upscalers")
+async def list_upscalers():
+    """List all available upscalers (both internal and external)."""
+    try:
+        upscalers = []
+        
+        # Add internal upscalers
+        for upscaler in sorted(INTERNAL_UPSCALERS):
+            upscalers.append({
+                "name": upscaler,
+                "type": "internal",
+                "description": f"Built-in {upscaler} upscaler"
+            })
+        
+        # Add external upscalers (ESRGAN models)
+        if UPSCALER_DIR.exists():
+            for model_path in UPSCALER_DIR.glob("*.pth"):
+                model_name = model_path.stem
+                # Try to determine scale from filename
+                scale = 4  # default
+                if "2x" in model_name.lower():
+                    scale = 2
+                elif "4x" in model_name.lower():
+                    scale = 4
+                
+                upscalers.append({
+                    "name": model_name,
+                    "type": "external",
+                    "scale": scale,
+                    "size_mb": round(model_path.stat().st_size / (1024 * 1024), 2),
+                    "description": f"ESRGAN upscaler model ({scale}x)"
+                })
+        else:
+            logger.warning(f"Upscaler directory not found: {UPSCALER_DIR}")
+        
+        if not upscalers:
+            logger.warning("No upscalers found (neither internal nor external)")
+        
+        return {
+            "status": "success",
+            "upscalers": sorted(upscalers, key=lambda x: x["name"])
+        }
+    except Exception as e:
+        logger.exception(f"Failed to list upscalers from {UPSCALER_DIR}")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
+
+@app.get("/sdapi/v1/sampling_methods")
+async def list_sampling_methods():
+    """List all available sampling methods and scheduler types."""
+    try:
+        sampling_methods = [
+            "Euler",
+            "Euler a",
+            "Heun",
+            "DPM2",
+            "DPM++ 2S a",
+            "DPM++ 2M",
+            "DPM++ 2M Karras",
+            "DPM++ SDE",
+            "DPM++ SDE Karras",
+            "DPM fast",
+            "DPM adaptive",
+            "LMS",
+            "LMS Karras",
+            "DDIM",
+            "PLMS",
+            "UniPC"
+        ]
+        
+        scheduler_types = [
+            "default",
+            "karras",
+            "exponential",
+            "ddim",
+            "pndm"
+        ]
+        
+        return {
+            "status": "success",
+            "sampling_methods": sampling_methods,
+            "scheduler_types": scheduler_types
+        }
+    except Exception as e:
+        logger.exception("Failed to list sampling methods")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
