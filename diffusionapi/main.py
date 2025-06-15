@@ -70,13 +70,19 @@ async def get_queue_status(job_id: str):
         with open(progress_file) as f:
             data = json.load(f)
         
-        # Get the job data to check if hires is enabled
+        # Get the job data to check if hires is enabled and to return full payload
         job_file = QUEUE_DIR / f"{job_id}_job.json"
         hires_enabled = False
+        job_payload = None
+        
+        # Always try to read the job file, even if we're not done
         if job_file.exists():
-            with open(job_file) as f:
-                job_data = json.load(f)
-                hires_enabled = job_data.get("hires", {}).get("enabled", False)
+            try:
+                with open(job_file) as f:
+                    job_payload = json.load(f)
+                    hires_enabled = job_payload.get("hires", {}).get("enabled", False)
+            except Exception as e:
+                logger.warning(f"Failed to read job file for {job_id}: {e}")
         
         # Calculate progress based on status and hires
         status = data.get("status", "unknown")
@@ -108,12 +114,35 @@ async def get_queue_status(job_id: str):
             "error": data.get("detail")
         }
         
-        # Add image data if available
-        if "image" in data:
-            response["image"] = data["image"]
-            response["output_path"] = data.get("output_path")
-            response["width"] = data.get("width")
-            response["height"] = data.get("height")
+        # If generation is complete (progress = 100% or status = done)
+        if progress >= 100 or status == "done":
+            # Always include the job payload if we have it
+            if job_payload is not None:
+                # Remove any sensitive or internal fields
+                safe_payload = {k: v for k, v in job_payload.items() 
+                              if k not in ['output', 'job_id']}  # Remove internal fields
+                response["payload"] = safe_payload
+            
+            # Add image data if available
+            if "image" in data:
+                response["image"] = data["image"]
+                response["output_path"] = data.get("output_path")
+                response["width"] = data.get("width")
+                response["height"] = data.get("height")
+                response["file_type"] = data.get("file_type")
+                response["jpeg_quality"] = data.get("jpeg_quality")
+                response["generation_time_sec"] = data.get("generation_time_sec")
+                response["memory_before_mb"] = data.get("memory_before_mb")
+                response["memory_after_mb"] = data.get("memory_after_mb")
+            
+            # Delete both JSON files after returning the response
+            try:
+                progress_file.unlink()
+                if job_file.exists():
+                    job_file.unlink()
+                logger.info(f"Cleaned up JSON files for job {job_id}")
+            except Exception as e:
+                logger.warning(f"Failed to delete JSON files for job {job_id}: {e}")
         
         return response
         
@@ -210,8 +239,13 @@ async def txt2img(request: Request):
 
     job = {k: v for k, v in job.items() if v is not None}
 
+    # Save both the progress file and the job file
     with open(QUEUE_DIR / f"{job_id}.json", "w") as f:
         json.dump({"status": "queued", "progress": 0.0, "job_id": job_id}, f)
+    
+    # Save the full job payload
+    with open(QUEUE_DIR / f"{job_id}_job.json", "w") as f:
+        json.dump(job, f)
 
     try:
         logger.info("Before subprocess")
