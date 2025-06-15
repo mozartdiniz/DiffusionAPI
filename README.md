@@ -1,238 +1,314 @@
-# DiffusionAPI
+# Diffusion API
 
-A FastAPI-based API for Stable Diffusion image generation.
+A FastAPI-based implementation for Stable Diffusion image generation, supporting both standard and SDXL models, with hires fix and LoRA support. This is a simplified API focused on core image generation functionality.
 
-## English
+## API Documentation
 
-### Prerequisites
+### Types
 
-- Python 3.10 or higher
-- Git
-- pip (Python package manager)
+```typescript
+// Common Types
+type LoRA = {
+    name: string;      // LoRA model name
+    scale: number;     // LoRA scale (default: 1.0)
+}
 
-### Setup Instructions
+type ModelInfo = {
+    name: string;      // Model name
+    type: "standard" | "sdxl";  // Model type
+    path: string;      // Path to model file
+}
 
-1. Clone the repository:
+type UpscalerInfo = {
+    name: string;      // Upscaler name
+    path: string;      // Path to upscaler file
+}
 
-```bash
-git clone https://github.com/yourusername/DiffusionAPI.git
-cd DiffusionAPI
+type HiresConfig = {
+    enabled: boolean;              // Whether hires fix is enabled
+    scale: number;                 // Upscaling factor (default: 2.0)
+    upscaler: string;             // Upscaler to use ("Latent" or external upscaler name)
+    steps: number;                 // Number of steps for upscaling (default: 20)
+    denoising_strength: number;    // Denoising strength for upscaling (default: 0.4)
+}
+
+// Request Types
+type Txt2ImgRequest = {
+    prompt: string;                // Main prompt
+    negative_prompt?: string;      // Optional negative prompt
+    steps?: number;                // Number of inference steps (default: 30)
+    cfg_scale?: number;           // Guidance scale (default: 7.0)
+    width?: number;               // Image width (default: 512)
+    height?: number;              // Image height (default: 512)
+    model?: string;               // Model name (default: "stable-diffusion-v1-5")
+    sampler_name?: string;        // Sampler name (default: "DPM++ 2M Karras")
+    scheduler_type?: string;      // Scheduler type (default: "karras")
+    fileType?: "jpg" | "png";     // Output file type (default: "jpg")
+    jpeg_quality?: number;        // JPEG quality (default: 85)
+    loras?: (LoRA | string)[];    // Array of LoRAs (can be objects or just names)
+    hires?: HiresConfig;          // Hires fix configuration
+    refiner_checkpoint?: string;  // Optional SDXL refiner model
+    refiner_switch_at?: number;   // When to switch to refiner (default: 0.8)
+}
+
+// Response Types
+type QueueStatusResponse = {
+    status: "success" | "error";   // Response status
+    job_id: string;               // Job identifier
+    progress: number;             // Progress percentage (0-100)
+    current_phase: string;        // Current phase ("generation", "initial generation", "upscaling", "done", etc.)
+    state: string;                // Current state ("queued", "processing", "done", "error")
+    error?: string;               // Error message if any
+    payload?: Txt2ImgRequest;     // Original request payload (only when complete)
+    image?: string;               // Base64 encoded image (only when complete)
+    output_path?: string;         // Path to saved image (only when complete)
+    width?: number;               // Final image width (only when complete)
+    height?: number;              // Final image height (only when complete)
+    file_type?: "jpg" | "png";    // Output file type (only when complete)
+    jpeg_quality?: number;        // JPEG quality used (only when complete)
+    generation_time_sec?: number; // Total generation time (only when complete)
+    memory_before_mb?: number;    // Memory usage before generation (only when complete)
+    memory_after_mb?: number;     // Memory usage after generation (only when complete)
+}
+
+type Txt2ImgResponse = {
+    job_id: string;               // Job identifier
+    status: "queued";             // Initial status
+}
+
+// Response Types for List Endpoints
+type ModelsResponse = {
+    status: "success" | "error";
+    models: ModelInfo[];
+    error?: string;
+}
+
+type LorasResponse = {
+    status: "success" | "error";
+    loras: LoRA[];
+    error?: string;
+}
+
+type UpscalersResponse = {
+    status: "success" | "error";
+    upscalers: UpscalerInfo[];
+    error?: string;
+}
 ```
 
-2. Create and activate a virtual environment:
+### Endpoints
 
-```bash
-# On macOS/Linux
-python3 -m venv venv
-source venv/bin/activate
+#### `GET /hello`
+Simple health check endpoint.
 
-# On Windows
-python -m venv venv
-.\venv\Scripts\activate
+**Response:**
+```typescript
+type HelloResponse = {
+    ok: boolean;
+}
 ```
 
-3. Install the required packages:
+#### `GET /models`
+List all available models.
 
-```bash
-pip install -r requirements.txt
+**Response:** `ModelsResponse`
+
+**Example Response:**
+```json
+{
+    "status": "success",
+    "models": [
+        {
+            "name": "stable-diffusion-v1-5",
+            "type": "standard",
+            "path": "stable_diffusion/models/stable-diffusion-v1-5.safetensors"
+        },
+        {
+            "name": "stable-diffusion-xl-base-1.0",
+            "type": "sdxl",
+            "path": "stable_diffusion/models/stable-diffusion-xl-base-1.0.safetensors"
+        }
+    ]
+}
 ```
 
-4. Create a `.env` file in the project root:
+#### `GET /loras`
+List all available LoRA models.
 
-```bash
-# Create .env file
-cat > .env << EOL
-# Path to the directory where models are stored
-MODELS_DIR=/path/to/your/models/directory
+**Response:** `LorasResponse`
 
-# API settings (optional)
-API_HOST=0.0.0.0
-API_PORT=7860
-EOL
+**Example Response:**
+```json
+{
+    "status": "success",
+    "loras": [
+        {
+            "name": "my-lora",
+            "scale": 1.0
+        },
+        {
+            "name": "another-lora",
+            "scale": 1.0
+        }
+    ]
+}
 ```
 
-Then edit the `.env` file to set your actual model directory path.
+#### `GET /upscalers`
+List all available upscalers.
 
-5. Download the Stable Diffusion model:
+**Response:** `UpscalersResponse`
 
-```bash
-# Download default model (stable-diffusion-v1-5)
-python3 download_model.py
-
-# Or download a specific model
-python3 download_model.py --model your-model-name
+**Example Response:**
+```json
+{
+    "status": "success",
+    "upscalers": [
+        {
+            "name": "Latent",
+            "path": "internal"
+        },
+        {
+            "name": "ESRGAN_4x",
+            "path": "stable_diffusion/upscalers/ESRGAN_4x.pth"
+        }
+    ]
+}
 ```
 
-6. Run the API server:
+#### `POST /txt2img`
+Submit a new image generation job.
 
-```bash
-uvicorn diffusionapi.main:app --host 0.0.0.0 --port 7860
-```
+**Request Body:** `Txt2ImgRequest`
 
-The API will be available at `http://localhost:7860`
+**Response:** `Txt2ImgResponse`
 
-### API Endpoints
-
-- `POST /sdapi/v1/txt2img`: Generate an image from a text prompt
-  - Request body:
-    ```json
-    {
-      "prompt": "your text prompt here",
-      "model": "your-model-name", // optional, defaults to "stable-diffusion-v1-5"
-      "steps": 30, // optional, defaults to 30
-      "cfg_scale": 7.5, // optional, defaults to 7.5
-      "width": 512, // optional, defaults to 512
-      "height": 512 // optional, defaults to 512
+**Example Request:**
+```json
+{
+    "prompt": "a beautiful green forest with a river and a waterfall",
+    "negative_prompt": "blurry, bad quality",
+    "steps": 30,
+    "cfg_scale": 7.0,
+    "width": 1024,
+    "height": 1024,
+    "model": "stable-diffusion-v1-5",
+    "sampler_name": "DPM++ 2M Karras",
+    "fileType": "jpg",
+    "jpeg_quality": 85,
+    "loras": [
+        {
+            "name": "my-lora",
+            "scale": 0.8
+        }
+    ],
+    "hires": {
+        "enabled": true,
+        "scale": 2.0,
+        "upscaler": "Latent",
+        "steps": 20,
+        "denoising_strength": 0.4
     }
-    ```
-  - Returns: Generated image as base64-encoded PNG
-
-### Environment Variables
-
-The following environment variables can be set in the `.env` file:
-
-- `MODELS_DIR`: Path to the directory where models are stored (default: "stable_diffusion/models")
-- `API_HOST`: Host address for the API server (default: "0.0.0.0")
-- `API_PORT`: Port number for the API server (default: 7860)
-
-### Available Models
-
-You can use any model that is compatible with the Stable Diffusion pipeline. Some popular options include:
-
-- `stable-diffusion-v1-5` (default)
-- `stable-diffusion-v2-1`
-- `stable-diffusion-xl-base-1.0`
-- `runwayml/stable-diffusion-v1-5`
-- `stabilityai/stable-diffusion-2-1`
-
-## Português
-
-### Pré-requisitos
-
-- Python 3.10 ou superior
-- Git
-- pip (gerenciador de pacotes Python)
-
-### Instruções de Configuração
-
-1. Clone o repositório:
-
-```bash
-git clone https://github.com/yourusername/DiffusionAPI.git
-cd DiffusionAPI
+}
 ```
 
-2. Crie e ative um ambiente virtual:
-
-```bash
-# No macOS/Linux
-python3 -m venv venv
-source venv/bin/activate
-
-# No Windows
-python -m venv venv
-.\venv\Scripts\activate
+**Example Response:**
+```json
+{
+    "job_id": "242d6f93-ea2d-4d5e-b820-0b61468558be",
+    "status": "queued"
+}
 ```
 
-3. Instale os pacotes necessários:
+#### `GET /queue/{job_id}`
+Check the status of a generation job.
 
-```bash
-pip install -r requirements.txt
+**Path Parameters:**
+- `job_id`: string (UUID of the job)
+
+**Response:** `QueueStatusResponse`
+
+**Example Response (In Progress):**
+```json
+{
+    "status": "success",
+    "job_id": "242d6f93-ea2d-4d5e-b820-0b61468558be",
+    "progress": 45.5,
+    "current_phase": "initial generation",
+    "state": "processing",
+    "error": null
+}
 ```
 
-4. Crie um arquivo `.env` na raiz do projeto:
-
-```bash
-# Criar arquivo .env
-cat > .env << EOL
-# Caminho para o diretório onde os modelos são armazenados
-MODELS_DIR=/caminho/para/seu/diretorio/de/modelos
-
-# Configurações da API (opcional)
-API_HOST=0.0.0.0
-API_PORT=7860
-EOL
+**Example Response (Complete):**
+```json
+{
+    "status": "success",
+    "job_id": "242d6f93-ea2d-4d5e-b820-0b61468558be",
+    "progress": 100,
+    "current_phase": "done",
+    "state": "done",
+    "error": null,
+    "payload": {
+        "prompt": "a beautiful green forest with a river and a waterfall",
+        "negative_prompt": "blurry, bad quality",
+        "steps": 30,
+        "cfg_scale": 7.0,
+        "width": 1024,
+        "height": 1024,
+        "model": "stable-diffusion-v1-5",
+        "sampler_name": "DPM++ 2M Karras",
+        "fileType": "jpg",
+        "jpeg_quality": 85,
+        "loras": [
+            {
+                "name": "my-lora",
+                "scale": 0.8
+            }
+        ],
+        "hires": {
+            "enabled": true,
+            "scale": 2.0,
+            "upscaler": "Latent",
+            "steps": 20,
+            "denoising_strength": 0.4
+        }
+    },
+    "image": "base64...",
+    "output_path": "outputs/242d6f93-ea2d-4d5e-b820-0b61468558be.jpg",
+    "width": 1024,
+    "height": 1024,
+    "file_type": "jpg",
+    "jpeg_quality": 85,
+    "generation_time_sec": 58.36,
+    "memory_before_mb": 538.34,
+    "memory_after_mb": 920.11
+}
 ```
 
-Depois edite o arquivo `.env` para definir o caminho real do seu diretório de modelos.
+## Notes
 
-5. Baixe o modelo Stable Diffusion:
+1. **Progress Tracking:**
+   - For normal generation: 0-100%
+   - For hires generation:
+     - Initial generation: 0-50%
+     - Upscaling: 50-100%
 
-```bash
-# Baixar modelo padrão (stable-diffusion-v1-5)
-python3 download_model.py
+2. **File Cleanup:**
+   - Both progress and job files are automatically deleted after the final response
+   - Generated images are saved in the `outputs` directory
 
-# Ou baixar um modelo específico
-python3 download_model.py --model seu-nome-de-modelo
-```
+3. **Supported Models:**
+   - Standard Stable Diffusion models
+   - SDXL models (with optional refiner)
+   - Custom models in the models directory
 
-6. Execute o servidor da API:
+4. **LoRA Support:**
+   - LoRAs can be specified as objects with name and scale
+   - Or as simple strings (using default scale of 1.0)
+   - LoRA files must be in the `stable_diffusion/loras` directory
 
-```bash
-uvicorn diffusionapi.main:app --host 0.0.0.0 --port 7860
-```
-
-A API estará disponível em `http://localhost:7860`
-
-### Endpoints da API
-
-- `POST /sdapi/v1/txt2img`: Gera uma imagem a partir de um prompt de texto
-  - Corpo da requisição:
-    ```json
-    {
-      "prompt": "seu prompt de texto aqui",
-      "model": "seu-nome-de-modelo", // opcional, padrão: "stable-diffusion-v1-5"
-      "steps": 30, // opcional, padrão: 30
-      "cfg_scale": 7.5, // opcional, padrão: 7.5
-      "width": 512, // opcional, padrão: 512
-      "height": 512 // opcional, padrão: 512
-    }
-    ```
-  - Retorna: Imagem gerada em formato PNG codificado em base64
-
-### Variáveis de Ambiente
-
-As seguintes variáveis de ambiente podem ser definidas no arquivo `.env`:
-
-- `MODELS_DIR`: Caminho para o diretório onde os modelos são armazenados (padrão: "stable_diffusion/models")
-- `API_HOST`: Endereço do host para o servidor da API (padrão: "0.0.0.0")
-- `API_PORT`: Número da porta para o servidor da API (padrão: 7860)
-
-### Modelos Disponíveis
-
-Você pode usar qualquer modelo compatível com o pipeline Stable Diffusion. Algumas opções populares incluem:
-
-- `stable-diffusion-v1-5` (padrão)
-- `stable-diffusion-v2-1`
-- `stable-diffusion-xl-base-1.0`
-- `runwayml/stable-diffusion-v1-5`
-- `stabilityai/stable-diffusion-2-1`
-
-## Troubleshooting / Solução de Problemas
-
-### Common Issues / Problemas Comuns
-
-1. **CUDA/MPS not available / CUDA/MPS não disponível**
-
-   - The model will run on CPU by default if no GPU is available
-   - O modelo rodará na CPU por padrão se nenhuma GPU estiver disponível
-
-2. **Model download fails / Falha no download do modelo**
-
-   - Check your internet connection
-   - Verify you have enough disk space
-   - Check if MODELS_DIR is set correctly in your .env file
-   - Verify the model name is correct
-   - Verifique sua conexão com a internet
-   - Verifique se você tem espaço suficiente em disco
-   - Verifique se MODELS_DIR está configurado corretamente no seu arquivo .env
-   - Verifique se o nome do modelo está correto
-
-3. **Port 7860 already in use / Porta 7860 já em uso**
-   - Change the port number in the .env file or uvicorn command
-   - Altere o número da porta no arquivo .env ou no comando uvicorn
-
-## License / Licença
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-Este projeto está licenciado sob a Licença MIT - veja o arquivo LICENSE para detalhes.
+5. **Hires Fix:**
+   - Supports both latent upscaling and external upscalers
+   - External upscaler models must be in the `stable_diffusion/upscalers` directory
+   - Latent upscaling is the default and recommended method

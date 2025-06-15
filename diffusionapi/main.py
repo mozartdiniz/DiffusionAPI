@@ -55,7 +55,7 @@ LORAS_DIR.mkdir(parents=True, exist_ok=True)
 async def hello():
     return {"ok": True}
 
-@app.get("/sdapi/v1/queue/{job_id}")
+@app.get("/queue/{job_id}")
 async def get_queue_status(job_id: str):
     """Get the status of a specific job."""
     try:
@@ -153,7 +153,7 @@ async def get_queue_status(job_id: str):
             content={"status": "error", "detail": str(e)}
         )
 
-@app.post("/sdapi/v1/txt2img")
+@app.post("/txt2img")
 async def txt2img(request: Request):
     payload = await request.json()
     job_id = str(uuid.uuid4())
@@ -290,7 +290,7 @@ async def txt2img(request: Request):
         "status": "queued"
     }
 
-@app.get("/sdapi/v1/models")
+@app.get("/models")
 async def list_models():
     """List all available models."""
     try:
@@ -323,7 +323,7 @@ async def list_models():
             content={"status": "error", "detail": str(e)}
         )
 
-@app.get("/sdapi/v1/loras")
+@app.get("/loras")
 async def list_loras():
     """List all available LoRAs."""
     try:
@@ -353,7 +353,7 @@ async def list_loras():
             content={"status": "error", "detail": str(e)}
         )
 
-@app.get("/sdapi/v1/upscalers")
+@app.get("/upscalers")
 async def list_upscalers():
     """List all available upscalers (both internal and external)."""
     try:
@@ -402,7 +402,7 @@ async def list_upscalers():
             content={"status": "error", "detail": str(e)}
         )
 
-@app.get("/sdapi/v1/sampling_methods")
+@app.get("/sampling_methods")
 async def list_sampling_methods():
     """List all available sampling methods and scheduler types."""
     try:
