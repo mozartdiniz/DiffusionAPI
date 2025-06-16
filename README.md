@@ -32,6 +32,24 @@ type HiresConfig = {
     denoising_strength: number;    // Denoising strength for upscaling (default: 0.4)
 }
 
+type SamplingMethod =
+  | "Euler"
+  | "Euler a"
+  | "Heun"
+  | "DPM2"
+  | "DPM++ 2S a"
+  | "DPM++ 2M"
+  | "DPM++ 2M Karras"
+  | "DPM++ SDE"
+  | "DPM++ SDE Karras"
+  | "DPM fast"
+  | "DPM adaptive"
+  | "LMS"
+  | "LMS Karras"
+  | "DDIM"
+  | "PLMS"
+  | "UniPC";
+
 // Request Types
 type Txt2ImgRequest = {
     prompt: string;                // Main prompt
@@ -49,6 +67,7 @@ type Txt2ImgRequest = {
     hires?: HiresConfig;          // Hires fix configuration
     refiner_checkpoint?: string;  // Optional SDXL refiner model
     refiner_switch_at?: number;   // When to switch to refiner (default: 0.8)
+    seed?: number;                // Optional random seed for reproducibility
 }
 
 // Response Types
@@ -69,6 +88,7 @@ type QueueStatusResponse = {
     generation_time_sec?: number; // Total generation time (only when complete)
     memory_before_mb?: number;    // Memory usage before generation (only when complete)
     memory_after_mb?: number;     // Memory usage after generation (only when complete)
+    seed?: number;                // The seed used for generation (always present when complete)
 }
 
 type Txt2ImgResponse = {
@@ -176,6 +196,55 @@ List all available upscalers.
 }
 ```
 
+#### `GET /sampling_methods`
+List all available sampling methods and scheduler types.
+
+**Response:**
+```typescript
+type SamplingMethodsResponse = {
+  status: "success" | "error";
+  sampling_methods: string[];
+  scheduler_types: string[];
+  error?: string;
+}
+```
+
+**Example Response:**
+```json
+{
+  "status": "success",
+  "sampling_methods": [
+    "Euler",
+    "Euler a",
+    "Heun",
+    "DPM2",
+    "DPM++ 2S a",
+    "DPM++ 2M",
+    "DPM++ 2M Karras",
+    "DPM++ SDE",
+    "DPM++ SDE Karras",
+    "DPM fast",
+    "DPM adaptive",
+    "LMS",
+    "LMS Karras",
+    "DDIM",
+    "PLMS",
+    "UniPC"
+  ],
+  "scheduler_types": [
+    "default",
+    "karras",
+    "exponential",
+    "ddim",
+    "pndm"
+  ]
+}
+```
+
+**Usage:**
+- Use the values from `sampling_methods` for the `sampler_name` field in your payload.
+- Use the values from `scheduler_types` for the `scheduler_type` field in your payload.
+
 #### `POST /txt2img`
 Submit a new image generation job.
 
@@ -192,8 +261,11 @@ Submit a new image generation job.
     "cfg_scale": 7.0,
     "width": 1024,
     "height": 1024,
-    "model": "stable-diffusion-v1-5",
+    "model": "stable-diffusion-xl-base-1.0",
+    "refiner_checkpoint": "stable-diffusion-xl-refiner-1.0",
+    "refiner_switch_at": 0.8,
     "sampler_name": "DPM++ 2M Karras",
+    "scheduler_type": "karras",
     "fileType": "jpg",
     "jpeg_quality": 85,
     "loras": [
@@ -208,7 +280,8 @@ Submit a new image generation job.
         "upscaler": "Latent",
         "steps": 20,
         "denoising_strength": 0.4
-    }
+    },
+    "seed": 123456789
 }
 ```
 
@@ -256,8 +329,11 @@ Check the status of a generation job.
         "cfg_scale": 7.0,
         "width": 1024,
         "height": 1024,
-        "model": "stable-diffusion-v1-5",
+        "model": "stable-diffusion-xl-base-1.0",
+        "refiner_checkpoint": "stable-diffusion-xl-refiner-1.0",
+        "refiner_switch_at": 0.8,
         "sampler_name": "DPM++ 2M Karras",
+        "scheduler_type": "karras",
         "fileType": "jpg",
         "jpeg_quality": 85,
         "loras": [
@@ -272,7 +348,8 @@ Check the status of a generation job.
             "upscaler": "Latent",
             "steps": 20,
             "denoising_strength": 0.4
-        }
+        },
+        "seed": 123456789
     },
     "image": "base64...",
     "output_path": "outputs/242d6f93-ea2d-4d5e-b820-0b61468558be.jpg",
@@ -282,7 +359,8 @@ Check the status of a generation job.
     "jpeg_quality": 85,
     "generation_time_sec": 58.36,
     "memory_before_mb": 538.34,
-    "memory_after_mb": 920.11
+    "memory_after_mb": 920.11,
+    "seed": 123456789
 }
 ```
 

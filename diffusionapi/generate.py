@@ -7,6 +7,7 @@ import psutil
 from pathlib import Path
 from dotenv import load_dotenv
 from typing import List, Dict, Any
+import random
 
 import logging
 
@@ -45,6 +46,20 @@ load_dotenv(env_path)
 LORAS_DIR = os.getenv("LORAS_DIR", "stable_diffusion/Lora")
 UPSCALERS_DIR = os.getenv("UPSCALERS_DIR", "stable_diffusion/upscalers")
 
+SCHEDULERS = {
+    "karras": "Karras",
+    "automatic": "Automatic",
+    "uniform": "Uniform",
+    "exponential": "Exponential",
+    "polyexponential": "Polyexponential",
+    "sgm": "SGM Uniform",
+    "kl": "KL Optimal",
+    "align": "Align Your Steps",
+    "simple": "Simple",
+    "normal": "Normal",
+    "ddim": "DDIM",
+    "beta": "Beta"
+}
 
 def is_huggingface_model(model_name: str) -> bool:
     return "/" in model_name
@@ -88,6 +103,8 @@ def main() -> None:
     # ------------------------------------------------------------------
     try:
         data = json.load(sys.stdin)
+        logger.info("==> Received payload:")
+        logger.info(json.dumps(data, indent=2)) 
     except Exception as e:
         logger.exception("Failed to load JSON from stdin")
         update_progress_file("unknown", {
@@ -109,8 +126,22 @@ def main() -> None:
     height = round_to_multiple_of_8(int(data.get("height", 512)))
     hires_cfg = data.get("hires", {}) or {}
     loras = data.get("loras", [])
-    sampler_name = data.get("sampler_name", "DPM++ 2M Karras")
-
+    scheduler_type = (data.get("scheduler_type") or "Karras").lower()
+    scheduler_key = scheduler_type.split()[0]
+    scheduler = SCHEDULERS.get(scheduler_key, SCHEDULERS["karras"])
+    seed = data.get("seed")
+    
+    # Handle seed conversion from string to int if needed
+    if seed is not None:
+        try:
+            seed = int(seed)  # Convert string to int if needed
+        except (ValueError, TypeError):
+            seed = None  # If conversion fails, treat as no seed
+    
+    if seed is None or seed == -1:
+        seed = random.randint(0, 2**32 - 1)
+        logger.info(f"No seed provided or seed == -1, generated random seed: {seed}")
+    
     logger.info(f"Initial dimensions (rounded to multiple of 8): {width}x{height}")
 
     # ------------------------------------------------------------------
@@ -165,9 +196,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 4.  Scheduler selection (quick heuristic)
     # ------------------------------------------------------------------
-    scheduler_key = sampler_name.lower().split()[0]
-    if "karras" in sampler_name.lower():
-        scheduler_key = "karras"
+    logger.info(f"Using scheduler: {scheduler_key} (from scheduler_type: {scheduler_type})")
 
     try:
         if scheduler_key == "karras":
@@ -278,6 +307,7 @@ def main() -> None:
     if not hires_enabled:
         # ░░ Simple, single pass ░░
         logger.info("==> Standard generation (no hires)")
+        generator = torch.Generator(device=device).manual_seed(seed)
         image = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -285,6 +315,7 @@ def main() -> None:
             guidance_scale=cfg_scale,
             width=width,
             height=height,
+            generator=generator,
             callback=callback,
             callback_steps=1,
         ).images[0]
@@ -299,6 +330,7 @@ def main() -> None:
 
         # 7a. Generate base image (low-res)
         callback.phase = 'initial'  # Set initial phase
+        generator = torch.Generator(device=device).manual_seed(seed)
         lowres_image = pipe(
             prompt=prompt,
             negative_prompt=negative_prompt,
@@ -306,6 +338,7 @@ def main() -> None:
             guidance_scale=cfg_scale,
             width=width,
             height=height,
+            generator=generator,
             callback=callback,
             callback_steps=1,
         ).images[0]
@@ -320,6 +353,7 @@ def main() -> None:
             
             pipe.enable_vae_tiling()
             callback.phase = 'upscaling'  # Set upscaling phase
+            generator = torch.Generator(device=device).manual_seed(seed)
             image = pipe(
                 prompt=prompt,
                 negative_prompt=negative_prompt,
@@ -329,6 +363,7 @@ def main() -> None:
                 guidance_scale=cfg_scale,
                 width=target_width,
                 height=target_height,
+                generator=generator,
                 callback=callback,
                 callback_steps=1,
             ).images[0]
@@ -345,6 +380,7 @@ def main() -> None:
                 logger.warning("Input image appears to be grayscale! Converting to RGB...")
                 lowres_image = lowres_image.convert('RGB')
             
+            generator = torch.Generator(device=device).manual_seed(seed)
             image = upscale_image(lowres_image, scale=scale, upscaler_name=upscaler_name)
             
             # Debug logging for output image
@@ -376,8 +412,9 @@ def main() -> None:
     with open(output_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
+    # Keep status as processing until we have the image data
     update_progress_file(job_id, {
-        "status": "done",
+        "status": "processing",  # Keep as processing until we have the image
         "progress": 1.0,
         "image": image_b64,
         "job_id": job_id,
@@ -393,7 +430,8 @@ def main() -> None:
         "loras": loras,
         "memory_before_mb": memory_before,
         "memory_after_mb": memory_after,
-        "generation_time_sec": elapsed_time
+        "generation_time_sec": elapsed_time,
+        "seed": seed  # Only include the actual seed value used
     })
 
     logger.info("==> Job %s finished in %.2fs (mem %.1f → %.1f MB)", job_id, elapsed_time, memory_before, memory_after)

@@ -9,6 +9,7 @@ import logging
 import threading
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import torch
 
 from diffusionapi.upscalers import INTERNAL_UPSCALERS, UPSCALER_DIR
 
@@ -105,44 +106,42 @@ async def get_queue_status(job_id: str):
         # Ensure progress is between 0 and 100
         progress = max(0, min(100, progress))
         
+        # Check if we have the image data
+        image_data = data.get("image")
+        has_image = image_data is not None and isinstance(image_data, str) and len(image_data) > 0
+        
+        # Only mark as done if we have the image
+        is_done = has_image and (progress >= 100 or status == "done")
+        
         response = {
             "status": "success",
             "job_id": job_id,
             "progress": round(progress, 2),
             "current_phase": current_phase,
-            "state": status,
+            "state": "done" if is_done else status,
             "error": data.get("detail")
         }
         
-        # If generation is complete (progress = 100% or status = done)
-        if progress >= 100 or status == "done":
+        # Only include complete payload and image data if we have the image
+        if has_image:
             # Always include the job payload if we have it
             if job_payload is not None:
                 # Remove any sensitive or internal fields
                 safe_payload = {k: v for k, v in job_payload.items() 
-                              if k not in ['output', 'job_id']}  # Remove internal fields
+                              if k not in ['output', 'job_id', 'seed']}  # Remove internal fields including seed
                 response["payload"] = safe_payload
             
-            # Add image data if available
-            if "image" in data:
-                response["image"] = data["image"]
-                response["output_path"] = data.get("output_path")
-                response["width"] = data.get("width")
-                response["height"] = data.get("height")
-                response["file_type"] = data.get("file_type")
-                response["jpeg_quality"] = data.get("jpeg_quality")
-                response["generation_time_sec"] = data.get("generation_time_sec")
-                response["memory_before_mb"] = data.get("memory_before_mb")
-                response["memory_after_mb"] = data.get("memory_after_mb")
-            
-            # Delete both JSON files after returning the response
-            try:
-                progress_file.unlink()
-                if job_file.exists():
-                    job_file.unlink()
-                logger.info(f"Cleaned up JSON files for job {job_id}")
-            except Exception as e:
-                logger.warning(f"Failed to delete JSON files for job {job_id}: {e}")
+            # Add image data and metadata from progress file
+            response["image"] = image_data
+            response["output_path"] = data.get("output_path")
+            response["width"] = data.get("width")
+            response["height"] = data.get("height")
+            response["file_type"] = data.get("file_type")
+            response["jpeg_quality"] = data.get("jpeg_quality")
+            response["generation_time_sec"] = data.get("generation_time_sec")
+            response["memory_before_mb"] = data.get("memory_before_mb")
+            response["memory_after_mb"] = data.get("memory_after_mb")
+            response["seed"] = data.get("seed")  # Get seed from progress file
         
         return response
         
@@ -157,6 +156,12 @@ async def get_queue_status(job_id: str):
 async def txt2img(request: Request):
     payload = await request.json()
     job_id = str(uuid.uuid4())
+
+    # Print the received payload
+    logger.info("Received txt2img request:")
+    logger.info(f"Job ID: {job_id}")
+    logger.info("Payload:")
+    logger.info(json.dumps(payload, indent=2))    
     
     # Get file type from payload, default to jpg
     file_type = payload.get("fileType", "jpg").lower()
@@ -219,7 +224,8 @@ async def txt2img(request: Request):
         "jpeg_quality": payload.get("jpeg_quality", 85),
         "loras": normalized_loras,
         "sampler_name": payload.get("sampler_name", "DPM++ 2M Karras"),
-        "scheduler_type": payload.get("scheduler_type", "karras")
+        "scheduler_type": payload.get("scheduler_type", "karras"),
+        "seed": payload.get("seed")  # This will be modified by generate.py if needed
     }
     
     hires = payload.get("hires")
@@ -287,7 +293,8 @@ async def txt2img(request: Request):
 
     return {
         "job_id": job_id,
-        "status": "queued"
+        "status": "queued",
+        "seed": payload.get("seed")  # This will be updated in status endpoint
     }
 
 @app.get("/models")
@@ -426,11 +433,18 @@ async def list_sampling_methods():
         ]
         
         scheduler_types = [
-            "default",
-            "karras",
-            "exponential",
-            "ddim",
-            "pndm"
+            "Automatic",
+            "Uniform",
+            "Karras",
+            "Exponential",
+            "Polyexponential",
+            "SGM Uniform",
+            "KL Optimal",
+            "Align Your Steps",
+            "Simple",
+            "Normal",
+            "DDIM",
+            "Beta"
         ]
         
         return {
