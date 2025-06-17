@@ -3,6 +3,12 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# SSL certificates
+*.pem
+*.key
+*.crt
+*.cert
+
 stable_diffusion/**/*
 
 outputs

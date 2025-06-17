@@ -364,6 +364,51 @@ Check the status of a generation job.
 }
 ```
 
+## HTTPS Setup
+
+The DiffusionAPI supports HTTPS for secure connections. Here are the available options:
+
+### Option 1: Self-signed Certificate (Recommended for Development)
+
+1. **Generate SSL certificates:**
+   ```bash
+   ./generate_ssl_certs.sh
+   ```
+
+2. **Start the server with HTTPS:**
+   ```bash
+   ./init.sh
+   ```
+
+   The server will now be available at `https://localhost:7866`
+
+### Option 2: Interactive HTTPS Setup
+
+Use the interactive script to choose your preferred setup:
+
+```bash
+./init_https.sh
+```
+
+This script provides three options:
+- **HTTP (default)**: Standard HTTP connection
+- **HTTPS with self-signed certificate**: Automatically generates and uses self-signed certificates
+- **HTTPS with custom certificates**: Use your own SSL certificates
+
+### Option 3: Manual HTTPS Configuration
+
+You can manually specify SSL certificates when starting uvicorn:
+
+```bash
+uvicorn diffusionapi.main:app --host 0.0.0.0 --port 7866 --ssl-keyfile=/path/to/key.pem --ssl-certfile=/path/to/cert.pem
+```
+
+### Important Notes for HTTPS
+
+- **Self-signed certificates**: Your browser will show a security warning. This is normal for development. Click "Advanced" and "Proceed to localhost" to continue.
+- **Production use**: For production environments, use certificates from a trusted Certificate Authority (CA).
+- **Certificate files**: Keep your private key (`key.pem`) secure and never commit it to version control.
+
 ## Notes
 
 1. **Progress Tracking:**
