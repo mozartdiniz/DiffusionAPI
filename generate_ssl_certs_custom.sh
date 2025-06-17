@@ -1,11 +1,17 @@
 #!/bin/bash
 
-# Generate self-signed SSL certificate for development
+# Generate self-signed SSL certificate for development with custom IP
 echo "Generating self-signed SSL certificate..."
 
-# Get the local IP address
-LOCAL_IP=$(ifconfig | grep "inet " | grep -v 127.0.0.1 | awk '{print $2}' | head -n 1)
-echo "Detected local IP: $LOCAL_IP"
+# Allow user to specify IP address
+if [ -z "$1" ]; then
+    echo "Usage: $0 <IP_ADDRESS>"
+    echo "Example: $0 192.168.0.122"
+    exit 1
+fi
+
+CUSTOM_IP=$1
+echo "Using IP address: $CUSTOM_IP"
 
 # Generate private key
 openssl genrsa -out key.pem 2048
@@ -33,7 +39,7 @@ subjectAltName = @alt_names
 DNS.1 = localhost
 DNS.2 = 127.0.0.1
 IP.1 = 127.0.0.1
-IP.2 = $LOCAL_IP
+IP.2 = $CUSTOM_IP
 EOF
 
 # Generate certificate with Subject Alternative Names
@@ -44,8 +50,7 @@ rm openssl.conf
 
 echo "SSL certificates generated successfully!"
 echo "key.pem - Private key"
-echo "cert.pem - Certificate (includes localhost and $LOCAL_IP)"
+echo "cert.pem - Certificate (includes localhost and $CUSTOM_IP)"
 echo ""
 echo "You can now start the server with HTTPS using: ./init.sh"
-echo "Note: Your browser will show a security warning for self-signed certificates."
-echo "This is normal for development. Click 'Advanced' and 'Proceed to localhost' to continue." 
+echo "Test with: curl --cacert cert.pem https://$CUSTOM_IP:7866/hello" 
