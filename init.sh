@@ -1,2 +1,2 @@
 #!/bin/bash
-uvicorn diffusionapi.main:app --host 0.0.0.0 --port 7866 --ssl-keyfile=./key.pem --ssl-certfile=./cert.pem
+uvicorn diffusionapi.main:app --host 0.0.0.0 --port 7866

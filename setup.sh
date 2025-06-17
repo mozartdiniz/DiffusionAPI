@@ -160,6 +160,47 @@ else
     echo -e "${GREEN}ilustmix-v6-sdxl model already exists${NC}"
 fi
 
+# Download digiplay/ChikMix_V3  
+if [ ! -d "stable_diffusion/models/models--digiplay--ChikMix_V3" ]; then
+    echo -e "${YELLOW}Downloading digiplay/ChikMix_V3 model...${NC}"
+    python download_model.py --model "digiplay/ChikMix_V3"
+else
+    echo -e "${GREEN}digiplay/ChikMix_V3 model already exists${NC}"
+fi
+
+# Download mirroring/pastel-mix   
+if [ ! -d "stable_diffusion/models/models--mirroring--pastel-mix" ]; then
+    echo -e "${YELLOW}Downloading mirroring/pastel-mix model...${NC}"
+    python download_model.py --model "mirroring/pastel-mix"
+else
+    echo -e "${GREEN}mirroring/pastel-mix model already exists${NC}"
+    fi
+
+# Download stablediffusionapi/realcartoon-xl-v6 
+if [ ! -d "stable_diffusion/models/models--stablediffusionapi--realcartoon-xl-v6" ]; then
+    echo -e "${YELLOW}Downloading stablediffusionapi/realcartoon-xl-v6 model...${NC}"
+    python download_model.py --model "stablediffusionapi/realcartoon-xl-v6"
+else
+    echo -e "${GREEN}stablediffusionapi/realcartoon-xl-v6 model already exists${NC}"
+fi
+
+# Download Meina/MeinaMix_V11   
+if [ ! -d "stable_diffusion/models/models--Meina--MeinaMix_V11" ]; then
+    echo -e "${YELLOW}Downloading Meina/MeinaMix_V11 model...${NC}"
+    python download_model.py --model "Meina/MeinaMix_V11"
+else
+    echo -e "${GREEN}Meina/MeinaMix_V11 model already exists${NC}"
+fi
+
+# Download gsdf/Counterfeit-V2.5
+if [ ! -d "stable_diffusion/models/models--gsdf--Counterfeit-V2.5" ]; then
+    echo -e "${YELLOW}Downloading gsdf/Counterfeit-V2.5 model...${NC}"
+    python download_model.py --model "gsdf/Counterfeit-V2.5"
+else
+    echo -e "${GREEN}gsdf/Counterfeit-V2.5 model already exists${NC}"
+fi
+
+
 echo -e "${GREEN}Setup completed successfully!${NC}"
 echo -e "${YELLOW}To start the server:${NC}"
 echo "1. Activate the virtual environment: source .venv/bin/activate"

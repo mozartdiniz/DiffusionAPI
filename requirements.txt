@@ -146,7 +146,6 @@ requests==2.32.4
     #   basicsr
     #   diffusers
     #   huggingface-hub
-    #   torchvision
     #   transformers
 safetensors==0.5.3
     # via
@@ -177,15 +176,17 @@ tifffile==2025.6.11
     # via scikit-image
 tokenizers==0.21.1
     # via transformers
-torch==2.1.2
+torch==2.7.1
     # via
     #   -r requirements.in
     #   accelerate
     #   basicsr
     #   peft
     #   torchvision
-torchvision==0.16.2
-    # via basicsr
+torchvision==0.22.1
+    # via
+    #   -r requirements.in
+    #   basicsr
 tqdm==4.67.1
     # via
     #   -r requirements.in

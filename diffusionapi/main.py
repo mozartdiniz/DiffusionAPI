@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 import torch
 
 from diffusionapi.upscalers import INTERNAL_UPSCALERS, UPSCALER_DIR
+from diffusionapi.generate import get_model_labels, get_model_name_from_label
 
 # Configura logger
 log_path = Path("server.log")
@@ -299,7 +300,7 @@ async def txt2img(request: Request):
 
 @app.get("/models")
 async def list_models():
-    """List all available models."""
+    """List all available models with their user-friendly labels."""
     try:
         # Set to store unique model names
         model_names = set()
@@ -308,13 +309,30 @@ async def list_models():
         for model_dir in MODELS_DIR.iterdir():
             if model_dir.is_dir():
                 # Check if this is a valid model directory by looking for unet component
-                if any(model_dir.glob("**/unet/diffusion_pytorch_model.safetensors")):
-                    # Get the model name and normalize it
-                    model_name = model_dir.name.replace("__", "/")  # Convert double underscore to slash
+                # Look for both .safetensors and .bin files
+                has_unet = (
+                    any(model_dir.glob("**/unet/diffusion_pytorch_model.safetensors")) or
+                    any(model_dir.glob("**/unet/diffusion_pytorch_model.bin"))
+                )
+                if has_unet:
+                    # Use the original directory name for proper label matching
+                    model_name = model_dir.name
                     model_names.add(model_name)
         
-        # Convert to sorted list
-        models = [{"name": name} for name in sorted(model_names)]
+        # Get labels
+        labels = get_model_labels()
+        
+        # Convert to sorted list with labels
+        models = []
+        for name in sorted(model_names):
+            # Get the label for this model
+            label = labels.get(name, name)  # Use the name as label if no label defined
+            
+            model_info = {
+                "name": name,
+                "label": label
+            }
+            models.append(model_info)
         
         if not models:
             logger.warning(f"No models found in {MODELS_DIR}")
@@ -454,6 +472,32 @@ async def list_sampling_methods():
         }
     except Exception as e:
         logger.exception("Failed to list sampling methods")
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
+
+@app.get("/models/aliases")
+async def list_model_aliases():
+    """List all available models with their user-friendly labels."""
+    try:
+        labels = get_model_labels()
+        
+        # Convert to simple list format
+        models = []
+        for model_name, label in labels.items():
+            models.append({
+                "name": model_name,
+                "label": label
+            })
+        
+        return {
+            "status": "success",
+            "models": sorted(models, key=lambda x: x["label"])
+        }
+        
+    except Exception as e:
+        logger.exception("Failed to list model labels")
         return JSONResponse(
             status_code=500,
             content={"status": "error", "detail": str(e)}

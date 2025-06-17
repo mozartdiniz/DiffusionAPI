@@ -65,16 +65,119 @@ def is_huggingface_model(model_name: str) -> bool:
     return "/" in model_name
 
 
-def is_sdxl_model(model_name: str) -> bool:
-    sdxl_indicators = ["sdxl", "xl-", "-xl"]
-    return any(indicator in model_name.lower() for indicator in sdxl_indicators)
+def is_sdxl_pipeline(pipeline) -> bool:
+    """Check if a pipeline is SDXL based on its type."""
+    from diffusers import StableDiffusionXLPipeline
+    return isinstance(pipeline, StableDiffusionXLPipeline)
 
+
+def is_sdxl_model(model_name: str) -> bool:
+    """Check if a model is SDXL by examining its configuration."""
+    try:
+        # Resolve the model path
+        model_id = resolve_model_path(model_name)
+        
+        # First, check for explicit SDXL indicators in the name
+        sdxl_indicators = ["sdxl", "xl-", "-xl"]
+        if any(indicator in model_name.lower() for indicator in sdxl_indicators):
+            logger.info(f"==> Detected SDXL by name pattern: {model_name}")
+            return True
+        
+        # Check for specific known SDXL models
+        known_sdxl_models = [
+            "amanatsu-illustrious-v11-sdxl",
+            "ilustmix-v6-sdxl",
+            "plantmilkmodelsuite",
+            "plantmilk"
+        ]
+        if any(known_model in model_name.lower() for known_model in known_sdxl_models):
+            logger.info(f"==> Detected known SDXL model: {model_name}")
+            return True
+        
+        # Try to load the model config using transformers
+        try:
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(model_id)
+        except Exception as e:
+            logger.warning(f"Could not load config for {model_name}: {e}")
+            # If we can't load the config, be conservative and assume it's NOT SDXL
+            return False
+        
+        # Check if it's an SDXL model by looking at the UNet configuration
+        if hasattr(config, 'unet_config'):
+            unet_config = config.unet_config
+        else:
+            # Try to load UNet config directly
+            try:
+                from transformers import AutoConfig
+                unet_config = AutoConfig.from_pretrained(model_id, subfolder="unet")
+            except Exception as e:
+                logger.warning(f"Could not load UNet config for {model_name}: {e}")
+                # If we can't load the UNet config, be conservative and assume it's NOT SDXL
+                return False
+        
+        # SDXL models have specific characteristics in their UNet config
+        if hasattr(unet_config, 'cross_attention_dim'):
+            # SDXL has cross_attention_dim of 2048 (vs 768 for regular SD)
+            is_sdxl = unet_config.cross_attention_dim == 2048
+            if is_sdxl:
+                logger.info(f"==> Detected SDXL by cross_attention_dim: {unet_config.cross_attention_dim}")
+            return is_sdxl
+        
+        # Additional check for SDXL-specific attributes
+        if hasattr(unet_config, 'addition_embed_type'):
+            is_sdxl = unet_config.addition_embed_type == "text_time"
+            if is_sdxl:
+                logger.info(f"==> Detected SDXL by addition_embed_type: {unet_config.addition_embed_type}")
+            return is_sdxl
+        
+        # If we can't determine, be conservative and assume it's NOT SDXL
+        logger.info(f"==> Could not determine SDXL status for {model_name}, assuming standard SD")
+        return False
+        
+    except Exception as e:
+        logger.warning(f"Error detecting SDXL model {model_name}: {e}")
+        # If there's any error, be conservative and assume it's NOT SDXL
+        return False
+
+
+def get_model_labels():
+    """Return a dictionary mapping model names to user-friendly labels."""
+    return {
+        # Actual models in the folder
+        "John6666__amanatsu-illustrious-v11-sdxl": "Amanatsu",
+        "models--John6666--ilustmix-v6-sdxl": "Ilustmix",
+        "models--misri--plantMilkModelSuite_hempII": "PlantMilk (HempII)",
+        "models--misri--plantMilkModelSuite_walnut": "PlantMilk (Walnut)",
+        "models--Meina--MeinaMix_V11": "MeinaMix V11",
+        "models--digiplay--ChikMix_V3": "ChikMix V3",
+        "models--mirroring--pastel-mix": "Pastel Mix",
+    }
+
+def get_model_name_from_label(label: str) -> str:
+    """Get the actual model name from a user-friendly label."""
+    labels = get_model_labels()
+    
+    # Normalize the input label for comparison
+    normalized_input = label.lower().replace('-', ' ').replace('_', ' ').strip()
+    
+    for model_name, model_label in labels.items():
+        # Normalize the stored label for comparison
+        normalized_label = model_label.lower().replace('-', ' ').replace('_', ' ').strip()
+        
+        if normalized_label == normalized_input:
+            return model_name
+    
+    return label  # Return the label if no match found
 
 def resolve_model_path(model_name: str) -> str:
-    if is_huggingface_model(model_name):
-        return model_name
+    # First check if it's a label and convert to actual model name
+    actual_name = get_model_name_from_label(model_name)
+    
+    if is_huggingface_model(actual_name):
+        return actual_name
     models_dir = os.getenv("MODELS_DIR", "stable_diffusion/models")
-    return os.path.join(models_dir, model_name)
+    return os.path.join(models_dir, actual_name)
 
 
 def update_progress_file(job_id: str, content: dict) -> None:
@@ -131,6 +234,9 @@ def main() -> None:
     scheduler = SCHEDULERS.get(scheduler_key, SCHEDULERS["karras"])
     seed = data.get("seed")
     
+    logger.info(f"==> Model name: {model_name}")
+    logger.info(f"==> Is SDXL model: {is_sdxl_model(model_name)}")
+    
     # Handle seed conversion from string to int if needed
     if seed is not None:
         try:
@@ -157,41 +263,129 @@ def main() -> None:
     update_progress_file(job_id, {"status": "loading", "progress": 0.0})
 
     # ------------------------------------------------------------------
-    # 3.  Load diffusion pipeline (+ optional SDXL refiner)
+    # 3.  Pipeline loading (SD vs SDXL detection + loading)
     # ------------------------------------------------------------------
     model_id = resolve_model_path(model_name)
-
-    logger.info("==> Loading model: %s", model_id)
-
-    if is_sdxl_model(model_name):
-        pipe = StableDiffusionXLPipeline.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            use_safetensors=True,
-            safety_checker=None
-        )
-
-        # Optional: attach a refiner
+    logger.info(f"==> Loading model: {model_name}")
+    logger.info(f"==> Model path: {model_id}")
+    
+    # Try to determine if this should be an SDXL model
+    should_be_sdxl = is_sdxl_model(model_name)
+    pipeline_type = "unknown"
+    pipe = None
+    
+    if should_be_sdxl:
+        logger.info("==> Detected as SDXL model, attempting SDXL pipeline first")
+        try:
+            # Try with safetensors first
+            pipe = StableDiffusionXLPipeline.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                use_safetensors=True,
+                safety_checker=None
+            )
+            pipeline_type = "sdxl"
+            logger.info("==> Successfully loaded SDXL pipeline with safetensors")
+        except Exception as e:
+            logger.warning(f"Failed to load SDXL pipeline with safetensors: {e}")
+            try:
+                # Try with bin format as fallback
+                pipe = StableDiffusionXLPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=dtype,
+                    use_safetensors=False,
+                    safety_checker=None
+                )
+                pipeline_type = "sdxl"
+                logger.info("==> Successfully loaded SDXL pipeline with bin format")
+            except Exception as e2:
+                logger.warning(f"Failed to load SDXL pipeline with bin format: {e2}")
+                logger.info("==> Falling back to standard SD pipeline")
+                should_be_sdxl = False
+    
+    if not should_be_sdxl or pipe is None:
+        logger.info("==> Loading as standard SD pipeline")
+        try:
+            # Try with safetensors first
+            pipe = StableDiffusionPipeline.from_pretrained(
+                model_id,
+                torch_dtype=dtype,
+                use_safetensors=True,
+                safety_checker=None
+            )
+            pipeline_type = "standard"
+            logger.info("==> Successfully loaded standard SD pipeline with safetensors")
+        except Exception as e:
+            logger.error(f"Failed to load standard SD pipeline with safetensors: {e}")
+            try:
+                # Try with bin format as fallback
+                pipe = StableDiffusionPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=dtype,
+                    use_safetensors=False,
+                    safety_checker=None
+                )
+                pipeline_type = "standard"
+                logger.info("==> Successfully loaded standard SD pipeline with bin format")
+            except Exception as e2:
+                logger.error(f"Failed to load standard SD pipeline with bin format: {e2}")
+                # If standard SD fails, try SDXL as last resort
+                if pipeline_type != "sdxl":
+                    logger.info("==> Trying SDXL pipeline as last resort")
+                    try:
+                        # Try SDXL with safetensors first
+                        pipe = StableDiffusionXLPipeline.from_pretrained(
+                            model_id,
+                            torch_dtype=dtype,
+                            use_safetensors=True,
+                            safety_checker=None
+                        )
+                        pipeline_type = "sdxl"
+                        logger.info("==> Successfully loaded SDXL pipeline as fallback with safetensors")
+                    except Exception as e3:
+                        logger.warning(f"Failed to load SDXL pipeline as fallback with safetensors: {e3}")
+                        try:
+                            # Try SDXL with bin format as final fallback
+                            pipe = StableDiffusionXLPipeline.from_pretrained(
+                                model_id,
+                                torch_dtype=dtype,
+                                use_safetensors=False,
+                                safety_checker=None
+                            )
+                            pipeline_type = "sdxl"
+                            logger.info("==> Successfully loaded SDXL pipeline as fallback with bin format")
+                        except Exception as e4:
+                            logger.error(f"Failed to load SDXL pipeline as fallback with bin format: {e4}")
+                            raise Exception(f"Could not load model {model_name} as either standard SD or SDXL with any format: {e}")
+    
+    # Optional: attach a refiner (only for SDXL)
+    if pipeline_type == "sdxl":
         refiner_id = data.get("refiner_checkpoint")
         switch_at = float(data.get("refiner_switch_at", 0.8))
         if refiner_id:
             logger.info("==> Loading SDXL refiner: %s", refiner_id)
             refiner_path = resolve_model_path(refiner_id)
-            refiner = StableDiffusionXLPipeline.from_pretrained(
-                refiner_path,
-                torch_dtype=dtype,
-                use_safetensors=True,
-                safety_checker=None
-            )
+            try:
+                # Try with safetensors first
+                refiner = StableDiffusionXLPipeline.from_pretrained(
+                    refiner_path,
+                    torch_dtype=dtype,
+                    use_safetensors=True,
+                    safety_checker=None
+                )
+                logger.info("==> Successfully loaded SDXL refiner with safetensors")
+            except Exception as e:
+                logger.warning(f"Failed to load SDXL refiner with safetensors: {e}")
+                # Try with bin format as fallback
+                refiner = StableDiffusionXLPipeline.from_pretrained(
+                    refiner_path,
+                    torch_dtype=dtype,
+                    use_safetensors=False,
+                    safety_checker=None
+                )
+                logger.info("==> Successfully loaded SDXL refiner with bin format")
             pipe.refiner = refiner
             pipe.refiner_inference_steps = int(steps * (1 - switch_at))
-    else:
-        pipe = StableDiffusionPipeline.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            use_safetensors=True,
-            safety_checker=None
-        )
 
     # ------------------------------------------------------------------
     # 4.  Scheduler selection (quick heuristic)
@@ -308,17 +502,34 @@ def main() -> None:
         # ░░ Simple, single pass ░░
         logger.info("==> Standard generation (no hires)")
         generator = torch.Generator(device=device).manual_seed(seed)
-        image = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            num_inference_steps=steps,
-            guidance_scale=cfg_scale,
-            width=width,
-            height=height,
-            generator=generator,
-            callback=callback,
-            callback_steps=1,
-        ).images[0]
+        
+        # Prepare kwargs for pipeline call
+        pipeline_kwargs = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": steps,
+            "guidance_scale": cfg_scale,
+            "width": width,
+            "height": height,
+            "generator": generator,
+            "callback": callback,
+            "callback_steps": 1,
+        }
+        
+        # Add SDXL-specific parameters if using SDXL model
+        is_sdxl = (pipeline_type == "sdxl")
+        
+        if is_sdxl:
+            logger.info(f"==> Using SDXL pipeline for generation: {model_name}")
+            pipeline_kwargs["added_cond_kwargs"] = {
+                "text_embeds": None,
+                "time_ids": None
+            }
+            logger.info(f"==> Added SDXL kwargs: {pipeline_kwargs['added_cond_kwargs']}")
+        else:
+            logger.info(f"==> Using standard SD pipeline for generation: {model_name}")
+        
+        image = pipe(**pipeline_kwargs).images[0]
     else:
         # ░░ Hi-Res Fix ░░
         logger.info("==> Hi-Res fix path enabled")
@@ -331,17 +542,32 @@ def main() -> None:
         # 7a. Generate base image (low-res)
         callback.phase = 'initial'  # Set initial phase
         generator = torch.Generator(device=device).manual_seed(seed)
-        lowres_image = pipe(
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            num_inference_steps=steps,
-            guidance_scale=cfg_scale,
-            width=width,
-            height=height,
-            generator=generator,
-            callback=callback,
-            callback_steps=1,
-        ).images[0]
+        
+        # Prepare kwargs for initial pipeline call
+        initial_kwargs = {
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "num_inference_steps": steps,
+            "guidance_scale": cfg_scale,
+            "width": width,
+            "height": height,
+            "generator": generator,
+            "callback": callback,
+            "callback_steps": 1,
+        }
+        
+        # Add SDXL-specific parameters if using SDXL model
+        is_sdxl = (pipeline_type == "sdxl")
+        
+        if is_sdxl:
+            logger.info(f"==> Using SDXL pipeline for generation: {model_name}")
+            initial_kwargs["added_cond_kwargs"] = {
+                "text_embeds": None,
+                "time_ids": None
+            }
+            logger.info(f"==> Added SDXL kwargs: {initial_kwargs['added_cond_kwargs']}")
+        
+        lowres_image = pipe(**initial_kwargs).images[0]
 
         # 7b. Upscale – latent or external
         if upscaler_name.lower() == "latent":
@@ -354,19 +580,34 @@ def main() -> None:
             pipe.enable_vae_tiling()
             callback.phase = 'upscaling'  # Set upscaling phase
             generator = torch.Generator(device=device).manual_seed(seed)
-            image = pipe(
-                prompt=prompt,
-                negative_prompt=negative_prompt,
-                image=lowres_image,
-                strength=denoising_strength,
-                num_inference_steps=hires_steps,
-                guidance_scale=cfg_scale,
-                width=target_width,
-                height=target_height,
-                generator=generator,
-                callback=callback,
-                callback_steps=1,
-            ).images[0]
+            
+            # Prepare kwargs for upscaling pipeline call
+            upscale_kwargs = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "image": lowres_image,
+                "strength": denoising_strength,
+                "num_inference_steps": hires_steps,
+                "guidance_scale": cfg_scale,
+                "width": target_width,
+                "height": target_height,
+                "generator": generator,
+                "callback": callback,
+                "callback_steps": 1,
+            }
+            
+            # Add SDXL-specific parameters if using SDXL model
+            is_sdxl = (pipeline_type == "sdxl")
+            
+            if is_sdxl:
+                logger.info(f"==> Using SDXL pipeline for generation: {model_name}")
+                upscale_kwargs["added_cond_kwargs"] = {
+                    "text_embeds": None,
+                    "time_ids": None
+                }
+                logger.info(f"==> Added SDXL kwargs: {upscale_kwargs['added_cond_kwargs']}")
+            
+            image = pipe(**upscale_kwargs).images[0]
         else:
             logger.info("   ↳ External upscaler '%s' (%sx)", upscaler_name, scale)
             # Debug logging for input image
