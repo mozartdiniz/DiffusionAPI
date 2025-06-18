@@ -1,0 +1,259 @@
+================================================================================
+COMPREHENSIVE LoRA COMPATIBILITY REPORT
+================================================================================
+Generated: 2025-06-18 09:51:11
+Total Tests: 72
+Compatible: 0
+Incompatible: 72
+Success Rate: 0.0%
+
+SUMMARY BY MODEL:
+----------------------------------------
+models--digiplay--ChikMix_V3: 0/18 (0.0%)
+models--misri--plantMilkModelSuite_hempII: 0/18 (0.0%)
+models--mirroring--pastel-mix: 0/18 (0.0%)
+models--misri--plantMilkModelSuite_walnut: 0/18 (0.0%)
+
+MODEL: models--digiplay--ChikMix_V3
+============================================================
+✓ No compatible LoRAs found
+
+✗ INCOMPATIBLE LoRAs:
+  • Body_Type_Slider
+    Reason: LoRA 'Body_Type_Slider' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Color_Temperature_Slider
+    Reason: LoRA 'Color_Temperature_Slider' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Cyberpunk_Anime
+    Reason: LoRA 'Cyberpunk_Anime' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Detail Tweaker
+    Reason: LoRA 'Detail Tweaker' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Torch not compiled with CUDA enabled
+  • Detail_Tweaker_smaller
+    Reason: LoRA 'Detail_Tweaker_smaller' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Torch not compiled with CUDA enabled
+  • Disney_Princess
+    Reason: LoRA 'Disney_Princess' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Dramatic_Lighting_Slider
+    Reason: LoRA 'Dramatic_Lighting_Slider' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Humans
+    Reason: LoRA 'Humans' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • MoriiMee_Gothic_Niji
+    Reason: LoRA 'MoriiMee_Gothic_Niji' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Natural Body
+    Reason: LoRA 'Natural Body' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Noise_Offset
+    Reason: LoRA 'Noise_Offset' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • People_Works_v1-v6
+    Reason: LoRA 'People_Works_v1-v6' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Popyay_Epic_Fantasy_Style
+    Reason: LoRA 'Popyay_Epic_Fantasy_Style' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Retro_Anime_Flux
+    Reason: LoRA 'Retro_Anime_Flux' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Stabilizer_IL_NAI
+    Reason: LoRA 'Stabilizer_IL_NAI' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Styles_For_Pony_Diffusion_V6
+    Reason: LoRA 'Styles_For_Pony_Diffusion_V6' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Velvets_Mythic_Fantasy
+    Reason: LoRA 'Velvets_Mythic_Fantasy' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Vixons_Pony_Styles
+    Reason: LoRA 'Vixons_Pony_Styles' may not be compatible with 'models--digiplay--ChikMix_V3'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+
+
+MODEL: models--mirroring--pastel-mix
+============================================================
+✓ No compatible LoRAs found
+
+✗ INCOMPATIBLE LoRAs:
+  • Body_Type_Slider
+    Reason: LoRA 'Body_Type_Slider' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Color_Temperature_Slider
+    Reason: LoRA 'Color_Temperature_Slider' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Cyberpunk_Anime
+    Reason: LoRA 'Cyberpunk_Anime' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Detail Tweaker
+    Reason: LoRA 'Detail Tweaker' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Detail_Tweaker_smaller
+    Reason: LoRA 'Detail_Tweaker_smaller' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Disney_Princess
+    Reason: LoRA 'Disney_Princess' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Dramatic_Lighting_Slider
+    Reason: LoRA 'Dramatic_Lighting_Slider' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Humans
+    Reason: LoRA 'Humans' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • MoriiMee_Gothic_Niji
+    Reason: LoRA 'MoriiMee_Gothic_Niji' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Natural Body
+    Reason: LoRA 'Natural Body' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Noise_Offset
+    Reason: LoRA 'Noise_Offset' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • People_Works_v1-v6
+    Reason: LoRA 'People_Works_v1-v6' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Popyay_Epic_Fantasy_Style
+    Reason: LoRA 'Popyay_Epic_Fantasy_Style' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Retro_Anime_Flux
+    Reason: LoRA 'Retro_Anime_Flux' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Stabilizer_IL_NAI
+    Reason: LoRA 'Stabilizer_IL_NAI' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Styles_For_Pony_Diffusion_V6
+    Reason: LoRA 'Styles_For_Pony_Diffusion_V6' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Velvets_Mythic_Fantasy
+    Reason: LoRA 'Velvets_Mythic_Fantasy' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+  • Vixons_Pony_Styles
+    Reason: LoRA 'Vixons_Pony_Styles' may not be compatible with 'models--mirroring--pastel-mix'. Check if the LoRA was trained for the same model architecture.
+    Error: Error no file named diffusion_pytorch_model.safetensors found in directory stable_diffusion/models/m...
+
+
+MODEL: models--misri--plantMilkModelSuite_hempII
+============================================================
+✓ No compatible LoRAs found
+
+✗ INCOMPATIBLE LoRAs:
+  • Body_Type_Slider
+    Reason: LoRA 'Body_Type_Slider' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Color_Temperature_Slider
+    Reason: LoRA 'Color_Temperature_Slider' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Cyberpunk_Anime
+    Reason: LoRA 'Cyberpunk_Anime' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Detail Tweaker
+    Reason: LoRA 'Detail Tweaker' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Torch not compiled with CUDA enabled
+  • Detail_Tweaker_smaller
+    Reason: LoRA 'Detail_Tweaker_smaller' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Torch not compiled with CUDA enabled
+  • Disney_Princess
+    Reason: LoRA 'Disney_Princess' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Dramatic_Lighting_Slider
+    Reason: LoRA 'Dramatic_Lighting_Slider' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Humans
+    Reason: LoRA 'Humans' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • MoriiMee_Gothic_Niji
+    Reason: LoRA 'MoriiMee_Gothic_Niji' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Natural Body
+    Reason: LoRA 'Natural Body' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Noise_Offset
+    Reason: LoRA 'Noise_Offset' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • People_Works_v1-v6
+    Reason: LoRA 'People_Works_v1-v6' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Popyay_Epic_Fantasy_Style
+    Reason: LoRA 'Popyay_Epic_Fantasy_Style' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Retro_Anime_Flux
+    Reason: LoRA 'Retro_Anime_Flux' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Stabilizer_IL_NAI
+    Reason: LoRA 'Stabilizer_IL_NAI' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Styles_For_Pony_Diffusion_V6
+    Reason: LoRA 'Styles_For_Pony_Diffusion_V6' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Velvets_Mythic_Fantasy
+    Reason: LoRA 'Velvets_Mythic_Fantasy' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Vixons_Pony_Styles
+    Reason: LoRA 'Vixons_Pony_Styles' may not be compatible with 'models--misri--plantMilkModelSuite_hempII'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+
+
+MODEL: models--misri--plantMilkModelSuite_walnut
+============================================================
+✓ No compatible LoRAs found
+
+✗ INCOMPATIBLE LoRAs:
+  • Body_Type_Slider
+    Reason: LoRA 'Body_Type_Slider' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Color_Temperature_Slider
+    Reason: LoRA 'Color_Temperature_Slider' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Cyberpunk_Anime
+    Reason: LoRA 'Cyberpunk_Anime' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Detail Tweaker
+    Reason: LoRA 'Detail Tweaker' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Torch not compiled with CUDA enabled
+  • Detail_Tweaker_smaller
+    Reason: LoRA 'Detail_Tweaker_smaller' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model.
+    Error: Torch not compiled with CUDA enabled
+  • Disney_Princess
+    Reason: LoRA 'Disney_Princess' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Dramatic_Lighting_Slider
+    Reason: LoRA 'Dramatic_Lighting_Slider' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Humans
+    Reason: LoRA 'Humans' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • MoriiMee_Gothic_Niji
+    Reason: LoRA 'MoriiMee_Gothic_Niji' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Natural Body
+    Reason: LoRA 'Natural Body' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Noise_Offset
+    Reason: LoRA 'Noise_Offset' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • People_Works_v1-v6
+    Reason: LoRA 'People_Works_v1-v6' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Popyay_Epic_Fantasy_Style
+    Reason: LoRA 'Popyay_Epic_Fantasy_Style' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Retro_Anime_Flux
+    Reason: LoRA 'Retro_Anime_Flux' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Stabilizer_IL_NAI
+    Reason: LoRA 'Stabilizer_IL_NAI' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Styles_For_Pony_Diffusion_V6
+    Reason: LoRA 'Styles_For_Pony_Diffusion_V6' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Velvets_Mythic_Fantasy
+    Reason: LoRA 'Velvets_Mythic_Fantasy' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+  • Vixons_Pony_Styles
+    Reason: LoRA 'Vixons_Pony_Styles' may not be compatible with 'models--misri--plantMilkModelSuite_walnut'. Check if the LoRA was trained for the same model architecture.
+    Error: Torch not compiled with CUDA enabled
+

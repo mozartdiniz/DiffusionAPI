@@ -11,6 +11,7 @@ NC='\033[0m' # No Color
 
 # Create workspace directory if it doesn't exist
 WORKSPACE_DIR="/workspace"
+BASE_PATH="/workspace/stable_diffusion/"
 
 # Create pip cache directory in workspace
 PIP_CACHE_DIR="/workspace/pip_cache"
@@ -151,6 +152,42 @@ if [ ! -d "stable_diffusion/models/models--John6666__amanatsu-illustrious-v11-sd
 else
     echo -e "${GREEN}amanatsu-illustrious-v11-sdxl model already exists${NC}"
 fi
+
+# --------- LoRAs ---------
+echo "Downloading LoRAs..."
+wget -O "$BASE_PATH/loras/Body_Type_Slider.safetensors" "https://civitai.com/api/download/models/1845953?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Detail Tweaker.safetensors" "https://civitai.com/api/download/models/135867?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Disney_Princess.safetensors" "https://civitai.com/api/download/models/244808?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/MoriiMee_Gothic_Niji.safetensors" "https://civitai.com/api/download/models/1244133?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Natural Body.safetensors" "https://civitai.com/api/download/models/263801?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/People_Works_v1-v6.safetensors" "https://civitai.com/api/download/models/1247042?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Popyay_Epic_Fantasy_Style.safetensors" "https://civitai.com/api/download/models/522995?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Styles_For_Pony_Diffusion_V6.safetensors" "https://civitai.com/api/download/models/794109?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Velvets_Mythic_Fantasy.safetensors" "https://civitai.com/api/download/models/1675131?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Color_Temperature_Slider.safetensors" "https://civitai.com/api/download/models/139548?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Noise_Offset.safetensors" "https://civitai.com/api/download/models/16576?type=Model&format=PickleTensor&size=full&fp=fp16&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Humans.safetensors" "https://civitai.com/api/download/models/111260?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Detail_Tweaker_Smaller.safetensors" "https://civitai.com/api/download/models/62833?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Retro_Anime_Flux.safetensors" "https://civitai.com/api/download/models/806265?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Dramatic_Lighting_Slider.safetensors" "https://civitai.com/api/download/models/1242203?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Cyberpunk_Anime.safetensors" "https://civitai.com/api/download/models/747534?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
+
+wget -O "$BASE_PATH/loras/Stabilizer_IL_NAI.safetensors" "https://civitai.com/api/download/models/1888270?type=Model&format=SafeTensor&token=91393cf55190ba01572778fd8d6f8a22"
 
 # Download ilustmix-v6-sdxl
 if [ ! -d "stable_diffusion/models/models--John6666--ilustmix-v6-sdxl" ]; then

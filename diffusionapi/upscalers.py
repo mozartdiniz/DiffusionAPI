@@ -6,11 +6,19 @@ import torch
 import numpy as np
 from torchvision.transforms.functional import to_tensor, to_pil_image
 from diffusers.utils.torch_utils import is_compiled_module
-from basicsr.archs.rrdbnet_arch import RRDBNet
 import tqdm
 import cv2
 
 logger = logging.getLogger(__name__)
+
+# Handle basicsr import with compatibility workaround
+try:
+    from basicsr.archs.rrdbnet_arch import RRDBNet
+    BASICSR_AVAILABLE = True
+except ImportError as e:
+    logger.warning(f"basicsr import failed: {e}. External upscalers will not be available.")
+    BASICSR_AVAILABLE = False
+    RRDBNet = None
 
 INTERNAL_UPSCALERS = {
     "Latent", "Latent (antialiased)", "Latent (bicubic)", "Latent (bicubic antialiased)",
@@ -184,6 +192,10 @@ def upscale_image(image: Image.Image, scale: float, upscaler_name: str) -> Image
 
     # Handle external upscalers
     logger.info(f"Attempting to use external upscaler: {upscaler_name}")
+    
+    if not BASICSR_AVAILABLE:
+        raise RuntimeError("External upscalers are not available because basicsr failed to import. Please check your torchvision version compatibility.")
+    
     upscaler_path = UPSCALER_DIR / f"{upscaler_name}.pth"
 
     if not upscaler_path.exists():

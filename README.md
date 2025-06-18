@@ -2,6 +2,140 @@
 
 A FastAPI-based implementation for Stable Diffusion image generation, supporting both standard and SDXL models, with hires fix and LoRA support. This is a simplified API focused on core image generation functionality.
 
+## Features
+
+- **Multi-Model Support**: Standard SD 1.5 and SDXL models
+- **LoRA Support**: Load and apply LoRA models with automatic compatibility detection
+- **Hires Fix**: Built-in upscaling with configurable parameters
+- **External Upscalers**: Support for Real-ESRGAN and other upscalers
+- **Model Aliases**: User-friendly model names
+- **LoRA Compatibility Testing**: Tools to test LoRA compatibility with models
+
+## LoRA Compatibility
+
+The API now includes robust LoRA compatibility handling:
+
+### Automatic Compatibility Detection
+
+- **Graceful Error Handling**: Incompatible LoRAs are skipped with clear warnings
+- **Smart File Detection**: Automatically finds LoRA files with different extensions (.safetensors, .bin, .pt, .pth)
+- **Multiple Weight Formats**: Supports various LoRA weight file naming conventions
+- **Detailed Error Messages**: Provides specific guidance for compatibility issues
+
+### Compatibility Testing Tool
+
+Use the included test script to check LoRA compatibility before generation:
+
+```bash
+# Test a single LoRA
+python test_lora_compatibility.py --model "your_model_name" --lora "path/to/lora.safetensors"
+
+# Test all LoRAs in a directory
+python test_lora_compatibility.py --model "your_model_name" --lora-dir "path/to/lora/directory"
+```
+
+### Comprehensive Compatibility Testing
+
+For thorough testing of all models against all LoRAs:
+
+```bash
+# List available models and LoRAs first
+python list_available_models_loras.py
+
+# Run comprehensive compatibility test
+python test_lora_compatibility.py
+
+# Generate report with custom filename
+python test_lora_compatibility.py --output my_compatibility_report.txt
+```
+
+The comprehensive test will:
+
+- **Automatically discover** all models in the `models/` directory and model labels
+- **Find all LoRAs** in the `loras/` directory
+- **Test every combination** of model + LoRA
+- **Generate a detailed report** with compatibility results
+- **Provide statistics** on success rates and compatibility issues
+
+**Expected Directory Structure:**
+
+```
+DiffusionAPI/
+├── stable_diffusion/          # Main stable diffusion directory
+│   ├── models/                # Model directories
+│   │   ├── models--digiplay--ChikMix_V3/
+│   │   ├── models--misri--plantMilkModelSuite_hempII/
+│   │   └── your-custom-model/
+│   ├── loras/                 # LoRA files
+│   │   ├── Detail_Tweaker_smaller.safetensors
+│   │   ├── Cyberpunk_Anime.safetensors
+│   │   └── Humans.safetensors
+│   └── upscalers/             # Upscaler models
+├── models/                    # Alternative models directory (optional)
+└── outputs/                   # Generated images
+```
+
+**Sample Report Output:**
+
+```
+================================================================================
+COMPREHENSIVE LoRA COMPATIBILITY REPORT
+================================================================================
+Generated: 2024-01-15 14:30:25
+Total Tests: 24
+Compatible: 18
+Incompatible: 6
+Success Rate: 75.0%
+
+SUMMARY BY MODEL:
+----------------------------------------
+Amanatsu: 6/8 (75.0%)
+PlantMilk (HempII): 6/8 (75.0%)
+stable-diffusion-v1-5: 6/8 (75.0%)
+
+MODEL: Amanatsu
+============================================================
+✓ COMPATIBLE LoRAs:
+  • detail_tweaker
+  • anime_style
+  • realistic_face
+
+✗ INCOMPATIBLE LoRAs:
+  • sd15_specific_lora
+    Reason: LoRA 'sd15_specific_lora' appears to be designed for SD 1.5 models, but you're using an SDXL model.
+```
+
+### Common Compatibility Issues
+
+1. **SD vs SDXL Mismatch**: LoRAs trained for SD 1.5 won't work with SDXL models and vice versa
+2. **Architecture Differences**: Different model architectures have incompatible tensor shapes
+3. **File Format Issues**: Ensure LoRA files are in the correct format (.safetensors recommended)
+
+### Troubleshooting LoRA Issues
+
+If you encounter LoRA loading errors:
+
+1. **Check Model Type**: Ensure your LoRA matches your model type (SD vs SDXL)
+2. **Verify File Integrity**: Make sure LoRA files are not corrupted
+3. **Use Compatibility Tool**: Run the test script to identify issues
+4. **Check Logs**: Look for specific error messages in the API logs
+
+### Example: Detail_Tweaker_smaller Error
+
+If you see errors like this:
+
+```
+size mismatch for mid_block.attentions.0.proj_in.lora_A.Detail_Tweaker_smaller.weight
+```
+
+This indicates the LoRA was trained for a different model architecture. The new system will:
+
+1. **Skip the incompatible LoRA** with a clear warning
+2. **Continue generation** with compatible LoRAs
+3. **Provide guidance** on model compatibility
+
+**Solution**: Use an SDXL model with SDXL-compatible LoRAs, or use a standard SD model with SD-compatible LoRAs.
+
 ## API Documentation
 
 ### Types
@@ -355,214 +489,6 @@ curl http://localhost:8000/models/aliases
 
 **Python script:**
 
-```python
-from diffusionapi.generate import get_model_labels
-labels = get_model_labels()
-for model_name, label in labels.items():
-    print(f"{label} -> {model_name}")
 ```
 
-#### `POST /txt2img`
-
-Submit a new image generation job.
-
-**Request Body:** `Txt2ImgRequest`
-
-**Response:** `Txt2ImgResponse`
-
-**Example Request:**
-
-```json
-{
-  "prompt": "a beautiful green forest with a river and a waterfall",
-  "negative_prompt": "blurry, bad quality",
-  "steps": 30,
-  "cfg_scale": 7.0,
-  "width": 1024,
-  "height": 1024,
-  "model": "stable-diffusion-xl-base-1.0",
-  "refiner_checkpoint": "stable-diffusion-xl-refiner-1.0",
-  "refiner_switch_at": 0.8,
-  "sampler_name": "DPM++ 2M Karras",
-  "scheduler_type": "karras",
-  "fileType": "jpg",
-  "jpeg_quality": 85,
-  "loras": [
-    {
-      "name": "my-lora",
-      "scale": 0.8
-    }
-  ],
-  "hires": {
-    "enabled": true,
-    "scale": 2.0,
-    "upscaler": "Latent",
-    "steps": 20,
-    "denoising_strength": 0.4
-  },
-  "seed": 123456789
-}
 ```
-
-**Example Response:**
-
-```json
-{
-  "job_id": "242d6f93-ea2d-4d5e-b820-0b61468558be",
-  "status": "queued"
-}
-```
-
-#### `GET /queue/{job_id}`
-
-Check the status of a generation job.
-
-**Path Parameters:**
-
-- `job_id`: string (UUID of the job)
-
-**Response:** `QueueStatusResponse`
-
-**Example Response (In Progress):**
-
-```json
-{
-  "status": "success",
-  "job_id": "242d6f93-ea2d-4d5e-b820-0b61468558be",
-  "progress": 45.5,
-  "current_phase": "initial generation",
-  "state": "processing",
-  "error": null
-}
-```
-
-**Example Response (Complete):**
-
-```json
-{
-  "status": "success",
-  "job_id": "242d6f93-ea2d-4d5e-b820-0b61468558be",
-  "progress": 100,
-  "current_phase": "done",
-  "state": "done",
-  "error": null,
-  "payload": {
-    "prompt": "a beautiful green forest with a river and a waterfall",
-    "negative_prompt": "blurry, bad quality",
-    "steps": 30,
-    "cfg_scale": 7.0,
-    "width": 1024,
-    "height": 1024,
-    "model": "stable-diffusion-xl-base-1.0",
-    "refiner_checkpoint": "stable-diffusion-xl-refiner-1.0",
-    "refiner_switch_at": 0.8,
-    "sampler_name": "DPM++ 2M Karras",
-    "scheduler_type": "karras",
-    "fileType": "jpg",
-    "jpeg_quality": 85,
-    "loras": [
-      {
-        "name": "my-lora",
-        "scale": 0.8
-      }
-    ],
-    "hires": {
-      "enabled": true,
-      "scale": 2.0,
-      "upscaler": "Latent",
-      "steps": 20,
-      "denoising_strength": 0.4
-    },
-    "seed": 123456789
-  },
-  "image": "base64...",
-  "output_path": "outputs/242d6f93-ea2d-4d5e-b820-0b61468558be.jpg",
-  "width": 1024,
-  "height": 1024,
-  "file_type": "jpg",
-  "jpeg_quality": 85,
-  "generation_time_sec": 58.36,
-  "memory_before_mb": 538.34,
-  "memory_after_mb": 920.11,
-  "seed": 123456789
-}
-```
-
-## HTTPS Setup
-
-The DiffusionAPI supports HTTPS for secure connections. Here are the available options:
-
-### Option 1: Self-signed Certificate (Recommended for Development)
-
-1. **Generate SSL certificates:**
-
-   ```bash
-   ./generate_ssl_certs.sh
-   ```
-
-2. **Start the server with HTTPS:**
-
-   ```bash
-   ./init.sh
-   ```
-
-   The server will now be available at `https://localhost:7866`
-
-### Option 2: Interactive HTTPS Setup
-
-Use the interactive script to choose your preferred setup:
-
-```bash
-./init_https.sh
-```
-
-This script provides three options:
-
-- **HTTP (default)**: Standard HTTP connection
-- **HTTPS with self-signed certificate**: Automatically generates and uses self-signed certificates
-- **HTTPS with custom certificates**: Use your own SSL certificates
-
-### Option 3: Manual HTTPS Configuration
-
-You can manually specify SSL certificates when starting uvicorn:
-
-```bash
-uvicorn diffusionapi.main:app --host 0.0.0.0 --port 7866 --ssl-keyfile=/path/to/key.pem --ssl-certfile=/path/to/cert.pem
-```
-
-### Important Notes for HTTPS
-
-- **Self-signed certificates**: Your browser will show a security warning. This is normal for development. Click "Advanced" and "Proceed to localhost" to continue.
-- **Production use**: For production environments, use certificates from a trusted Certificate Authority (CA).
-- **Certificate files**: Keep your private key (`key.pem`) secure and never commit it to version control.
-
-## Notes
-
-1. **Progress Tracking:**
-
-   - For normal generation: 0-100%
-   - For hires generation:
-     - Initial generation: 0-50%
-     - Upscaling: 50-100%
-
-2. **File Cleanup:**
-
-   - Both progress and job files are automatically deleted after the final response
-   - Generated images are saved in the `outputs` directory
-
-3. **Supported Models:**
-
-   - Standard Stable Diffusion models
-   - SDXL models (with optional refiner)
-   - Custom models in the models directory
-
-4. **LoRA Support:**
-
-   - LoRAs can be specified as objects with name and scale
-   - Or as simple strings (using default scale of 1.0)
-   - LoRA files must be in the `stable_diffusion/loras` directory
-
-5. **Hires Fix:**
-   - Supports both latent upscaling and external upscalers
-   - External upscaler models must be in the `stable_diffusion/upscalers` directory
-   - Latent upscaling is the default and recommended method

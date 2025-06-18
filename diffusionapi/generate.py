@@ -488,7 +488,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 6.  Load LoRAs (optional)
     # ------------------------------------------------------------------
-    load_loras(pipe, loras)
+    load_loras(pipe, loras, model_name)
 
     # ------------------------------------------------------------------
     # 7.  Generation (single-pass OR hires-fix)
@@ -678,34 +678,148 @@ def main() -> None:
     logger.info("==> Job %s finished in %.2fs (mem %.1f → %.1f MB)", job_id, elapsed_time, memory_before, memory_after)
 
 
-def load_loras(pipeline, loras: List[Dict[str, Any]]) -> None:
+def get_lora_compatibility_info(lora_name: str, model_name: str) -> str:
+    """Get information about LoRA compatibility with different model types."""
+    lora_lower = lora_name.lower()
+    model_lower = model_name.lower()
+    
+    # Common SDXL LoRAs
+    sdxl_indicators = [
+        "sdxl", "xl", "xlarge", "1024", "detail tweaker", "detail_tweaker",
+        "realistic", "photorealistic", "high detail", "ultra detail"
+    ]
+    
+    # Common SD 1.5 LoRAs
+    sd15_indicators = [
+        "sd15", "sd1.5", "stable diffusion", "anime", "cartoon", "artistic"
+    ]
+    
+    # Check if LoRA name suggests SDXL
+    is_likely_sdxl = any(indicator in lora_lower for indicator in sdxl_indicators)
+    is_likely_sd15 = any(indicator in lora_lower for indicator in sd15_indicators)
+    
+    # Check model type
+    is_sdxl_model = "sdxl" in model_lower or "xl" in model_lower
+    is_sd_model = "sd" in model_lower and not is_sdxl_model
+    
+    if is_likely_sdxl and not is_sdxl_model:
+        return f"LoRA '{lora_name}' appears to be designed for SDXL models, but you're using a standard SD model. Try using an SDXL base model."
+    elif is_likely_sd15 and is_sdxl_model:
+        return f"LoRA '{lora_name}' appears to be designed for SD 1.5 models, but you're using an SDXL model. Try using a standard SD base model."
+    else:
+        return f"LoRA '{lora_name}' may not be compatible with '{model_name}'. Check if the LoRA was trained for the same model architecture."
+
+
+def load_loras(pipeline, loras: List[Dict[str, Any]], model_name: str = "") -> None:
     """Load LoRAs into the pipeline."""
     if not loras:
         return
 
     logger.info(f"==> Loading {len(loras)} LoRAs")
+    successful_loras = []
+    failed_loras = []
+    
     for lora in loras:
         try:
             lora_name = lora["name"]
             lora_scale = lora["scale"]
-            # Ensure we have the .safetensors extension
+            
+            # Handle different LoRA file formats
             lora_path = Path(lora["path"])
             if not lora_path.suffix:
-                lora_path = lora_path.with_suffix(".safetensors")
+                # Try common LoRA extensions
+                possible_extensions = [".safetensors", ".bin", ".pt", ".pth"]
+                lora_path_found = None
+                
+                for ext in possible_extensions:
+                    test_path = lora_path.with_suffix(ext)
+                    if test_path.exists():
+                        lora_path = test_path
+                        lora_path_found = True
+                        break
+                
+                if not lora_path_found:
+                    # Default to safetensors
+                    lora_path = lora_path.with_suffix(".safetensors")
             
             if not lora_path.exists():
                 raise FileNotFoundError(f"LoRA file not found: {lora_path}")
             
-            logger.info(f"   ↳ Loading LoRA '{lora_name}' with scale {lora_scale}")
-            pipeline.load_lora_weights(
-                lora_path,
-                weight_name="pytorch_lora_weights.safetensors",
-                adapter_name=lora_name
-            )
+            logger.info(f"   ↳ Loading LoRA '{lora_name}' with scale {lora_scale} from {lora_path}")
+            
+            # Try different weight file names
+            weight_names = [
+                "pytorch_lora_weights.safetensors",
+                "pytorch_lora_weights.bin",
+                "pytorch_lora_weights.pt",
+                "pytorch_lora_weights.pth",
+                "lora.safetensors",
+                "lora.bin",
+                "lora.pt",
+                "lora.pth"
+            ]
+            
+            lora_loaded = False
+            for weight_name in weight_names:
+                try:
+                    pipeline.load_lora_weights(
+                        lora_path,
+                        weight_name=weight_name,
+                        adapter_name=lora_name
+                    )
+                    lora_loaded = True
+                    logger.debug(f"      Loaded with weight file: {weight_name}")
+                    break
+                except Exception as weight_error:
+                    if "not found" in str(weight_error).lower():
+                        continue
+                    else:
+                        raise weight_error
+            
+            if not lora_loaded:
+                # Try loading without specifying weight_name
+                pipeline.load_lora_weights(
+                    lora_path,
+                    adapter_name=lora_name
+                )
+            
             pipeline.fuse_lora(adapter_name=lora_name, scale=lora_scale)
+            successful_loras.append(lora_name)
+            logger.info(f"   ✓ Successfully loaded LoRA '{lora_name}'")
+            
         except Exception as e:
-            logger.exception(f"Failed to load LoRA {lora_name}")
-            raise RuntimeError(f"LoRA error: {str(e)}")
+            lora_name = lora.get("name", "unknown")
+            error_msg = str(e)
+            
+            # Check if it's a compatibility error
+            if any(keyword in error_msg.lower() for keyword in ["size mismatch", "incompatible", "shape", "dimension"]):
+                logger.warning(f"   ⚠ LoRA '{lora_name}' is incompatible with current model architecture")
+                logger.warning(f"      Error: {error_msg[:200]}...")
+                
+                # Provide specific compatibility guidance
+                if model_name:
+                    compatibility_info = get_lora_compatibility_info(lora_name, model_name)
+                    logger.warning(f"      {compatibility_info}")
+                else:
+                    logger.warning(f"      This LoRA was likely trained for a different model type (SD vs SDXL)")
+                    
+            elif "not found" in error_msg.lower():
+                logger.error(f"   ✗ LoRA file not found: {lora_path}")
+            else:
+                logger.error(f"   ✗ Failed to load LoRA '{lora_name}': {error_msg}")
+            
+            failed_loras.append(lora_name)
+    
+    # Summary
+    if successful_loras:
+        logger.info(f"==> Successfully loaded {len(successful_loras)} LoRAs: {', '.join(successful_loras)}")
+    
+    if failed_loras:
+        logger.warning(f"==> Failed to load {len(failed_loras)} LoRAs: {', '.join(failed_loras)}")
+        logger.warning(f"==> Generation will continue with only the compatible LoRAs")
+    
+    if not successful_loras and failed_loras:
+        logger.warning(f"==> No LoRAs were successfully loaded. Generation will proceed without LoRAs.")
 
 
 if __name__ == "__main__":
