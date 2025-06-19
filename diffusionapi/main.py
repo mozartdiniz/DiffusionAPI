@@ -3,6 +3,8 @@ import uuid
 import os
 import json
 import subprocess
+import base64
+import io
 from pathlib import Path
 from dotenv import load_dotenv
 import logging
@@ -10,9 +12,11 @@ import threading
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import torch
+from PIL import Image
 
 from diffusionapi.upscalers import INTERNAL_UPSCALERS, UPSCALER_DIR
 from diffusionapi.generate import get_model_labels, get_model_name_from_label
+from diffusionapi.metadata import read_metadata_from_image, parse_infotext
 
 # Configura logger
 log_path = Path("server.log")
@@ -501,4 +505,98 @@ async def list_model_aliases():
         return JSONResponse(
             status_code=500,
             content={"status": "error", "detail": str(e)}
+        )
+
+@app.post("/img-info")
+async def img_info(request: Request):
+    """
+    Extract metadata from a base64 encoded image.
+    
+    Expected request format:
+    {
+        "image": "base64_encoded_image_data"
+    }
+    
+    Returns:
+    {
+        "info": "raw_metadata_string",
+        "items": {"other_metadata": "values"},
+        "parameters": {"parsed_parameters": "values"}
+    }
+    """
+    try:
+        # Parse the request
+        payload = await request.json()
+        image_base64 = payload.get("image")
+        
+        if not image_base64:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "No image data provided"
+                }
+            )
+        
+        # Decode base64 image
+        try:
+            # Remove data URL prefix if present
+            if image_base64.startswith('data:image/'):
+                # Extract the base64 part after the comma
+                image_base64 = image_base64.split(',', 1)[1]
+            
+            image_data = base64.b64decode(image_base64)
+        except Exception as e:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": f"Invalid base64 image data: {str(e)}"
+                }
+            )
+        
+        # Load image with PIL
+        try:
+            image = Image.open(io.BytesIO(image_data))
+        except Exception as e:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": f"Failed to load image: {str(e)}"
+                }
+            )
+        
+        # Extract metadata
+        geninfo, other_metadata = read_metadata_from_image(image)
+        
+        # Parse the metadata if available
+        parameters = {}
+        if geninfo:
+            try:
+                parameters = parse_infotext(geninfo)
+            except Exception as e:
+                logger.warning(f"Failed to parse infotext: {e}")
+                # If parsing fails, still return the raw info
+                parameters = {"raw_info": geninfo}
+        
+        # Prepare response
+        response = {
+            "status": "success",
+            "info": geninfo or "",
+            "items": other_metadata or {},
+            "parameters": parameters
+        }
+        
+        logger.info(f"Successfully extracted metadata from image")
+        return response
+        
+    except Exception as e:
+        logger.exception(f"Failed to extract image metadata")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "detail": f"Internal server error: {str(e)}"
+            }
         )

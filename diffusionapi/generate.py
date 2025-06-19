@@ -24,6 +24,9 @@ from .upscalers import upscale_image
 # import cv2
 import numpy as np
 
+# Import the new metadata module
+from .metadata import create_infotext, save_image_with_metadata
+
 ###############################################################################
 # Utilities
 ###############################################################################
@@ -644,11 +647,44 @@ def main() -> None:
     file_type = data.get("file_type", "jpg")
     jpeg_quality = data.get("jpeg_quality", 85)
     
-    # Save image with appropriate settings
-    if file_type == "jpg":
-        image.save(output_path, "JPEG", quality=jpeg_quality, optimize=True)
-    else:  # PNG
-        image.save(output_path, "PNG", optimize=True)
+    # Create metadata infotext in the same format as Stable Diffusion web UI
+    geninfo = create_infotext(
+        prompt=prompt,
+        negative_prompt=negative_prompt,
+        steps=steps,
+        sampler_name=scheduler,
+        scheduler=scheduler,
+        cfg_scale=cfg_scale,
+        seed=seed,
+        width=image.width,
+        height=image.height,
+        model_name=model_name,
+        model_hash="",  # You can add model hash if available
+        vae_name="",    # You can add VAE name if available
+        vae_hash="",    # You can add VAE hash if available
+        denoising_strength=data.get("denoising_strength"),
+        clip_skip=data.get("clip_skip"),
+        tiling=data.get("tiling", False),
+        restore_faces=data.get("restore_faces", False),
+        extra_generation_params={
+            "LoRAs": ", ".join([f"{lora['name']}:{lora['scale']}" for lora in loras]) if loras else None,
+            "Memory before": f"{memory_before:.1f} MB",
+            "Memory after": f"{memory_after:.1f} MB",
+            "Generation time": f"{elapsed_time:.2f}s",
+        },
+        user=data.get("user"),
+        version="DiffusionAPI v1.0"
+    )
+    
+    # Save image with metadata using the new function
+    extension = f".{file_type}"
+    save_image_with_metadata(
+        image=image,
+        filename=output_path,
+        geninfo=geninfo,
+        extension=extension,
+        jpeg_quality=jpeg_quality
+    )
     
     with open(output_path, "rb") as f:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
