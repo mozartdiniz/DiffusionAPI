@@ -302,6 +302,195 @@ async def txt2img(request: Request):
         "seed": payload.get("seed")  # This will be updated in status endpoint
     }
 
+@app.post("/img2img")
+async def img2img(request: Request):
+    payload = await request.json()
+    job_id = str(uuid.uuid4())
+
+    # Print the received payload
+    logger.info("Received img2img request:")
+    logger.info(f"Job ID: {job_id}")
+    logger.info("Payload:")
+    logger.info(json.dumps(payload, indent=2))    
+    
+    # Validate required fields
+    if not payload.get("image"):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Image field is required"}
+        )
+    
+    if not payload.get("prompt"):
+        return JSONResponse(
+            status_code=400,
+            content={"status": "error", "detail": "Prompt field is required"}
+        )
+    
+    # Get file type from payload, default to jpg
+    file_type = payload.get("fileType", "jpg").lower()
+    if file_type not in ["png", "jpg"]:
+        file_type = "jpg"
+    
+    # Set output path with correct extension
+    output_path = str(Path("outputs") / f"{job_id}.{file_type}")
+
+    # Handle loras
+    loras = payload.get("loras", [])
+    if not isinstance(loras, list):
+        loras = []
+
+    normalized_loras = []
+    for entry in loras:
+        if isinstance(entry, dict) and "name" in entry:
+            # Get the lora name and verify it exists
+            lora_name = entry["name"]
+            lora_path = LORAS_DIR / f"{lora_name}.safetensors"
+            
+            if not lora_path.exists():
+                logger.warning(f"LoRA not found: {lora_name}")
+                continue
+                
+            normalized_loras.append({
+                "name": lora_name,
+                "path": str(lora_path),
+                "scale": float(entry.get("scale", 1.0))
+            })
+        elif isinstance(entry, str):
+            # Handle simple string lora names
+            lora_path = LORAS_DIR / f"{entry}.safetensors"
+            
+            if not lora_path.exists():
+                logger.warning(f"LoRA not found: {entry}")
+                continue
+                
+            normalized_loras.append({
+                "name": entry,
+                "path": str(lora_path),
+                "scale": 1.0
+            })
+
+    payload["loras"] = normalized_loras
+
+    # Handle resize parameters
+    resize_mode = payload.get("resize_mode", "just resize")
+    resize_to = payload.get("resize_to")
+    resize_by = payload.get("resize_by") or payload.get("resized_by")  # Accept both formats
+    
+    # Convert resize_mode to numeric format expected by webui
+    resize_mode_map = {
+        "just resize": 0,
+        "crop and resize": 1,
+        "resize and fill": 2
+    }
+    resize_mode_num = resize_mode_map.get(resize_mode, 0)
+    
+    # Handle resize_by as simple number (scale factor) or object
+    if resize_by is not None:
+        if isinstance(resize_by, (int, float)):
+            # Convert simple number to scale object
+            scale_factor = float(resize_by)
+            resize_by = {"width": scale_factor, "height": scale_factor}
+            logger.info(f"Converted simple resize_by value {resize_by} to scale object: {resize_by}")
+    
+    logger.info(f"Resize parameters: mode='{resize_mode}' -> {resize_mode_num}, resize_to={resize_to}, resize_by={resize_by}")
+
+    job = {
+        "job_id": job_id,
+        "type": "img2img",  # Mark this as img2img job
+        "prompt": payload.get("prompt", ""),
+        "negative_prompt": payload.get("negative_prompt", ""),
+        "image": payload.get("image"),  # Base64 encoded input image
+        "steps": payload.get("steps", 30),
+        "cfg_scale": payload.get("cfg_scale", 7.0),
+        "width": payload.get("width", 512),
+        "height": payload.get("height", 512),
+        "model": payload.get("model", "stable-diffusion-v1-5"),
+        "refiner_checkpoint": payload.get("refiner_checkpoint"),
+        "refiner_switch_at": payload.get("refiner_switch_at", 0.8),
+        "output": output_path,
+        "file_type": file_type,
+        "jpeg_quality": payload.get("jpeg_quality", 85),
+        "loras": normalized_loras,
+        "sampler_name": payload.get("sampler_name", "DPM++ 2M Karras"),
+        "scheduler_type": payload.get("scheduler_type", "karras"),
+        "seed": payload.get("seed"),  # This will be modified by generate.py if needed
+        # Img2Img specific parameters
+        "denoising_strength": payload.get("denoising_strength", 0.75),
+        "image_guidance_scale": payload.get("image_guidance_scale", 1.8),
+        "resize_mode": resize_mode_num,
+        "resize_to": resize_to,
+        "resize_by": resize_by
+    }
+    
+    hires = payload.get("hires")
+    
+    logger.info("Before hires")
+    
+    if isinstance(hires, dict) and hires.get("enabled"):
+        job["hires"] = {
+            "enabled": True,
+            "scale": float(hires.get("scale", 2.0)),
+            "upscaler": hires.get("upscaler", "Latent"),
+            "steps": int(hires.get("steps", 20)),
+            "denoising_strength": float(hires.get("denoising_strength", 0.4))
+        }
+
+    logger.info("After hires")
+
+    job = {k: v for k, v in job.items() if v is not None}
+
+    # Save both the progress file and the job file
+    with open(QUEUE_DIR / f"{job_id}.json", "w") as f:
+        json.dump({"status": "queued", "progress": 0.0, "job_id": job_id}, f)
+    
+    # Save the full job payload
+    with open(QUEUE_DIR / f"{job_id}_job.json", "w") as f:
+        json.dump(job, f)
+
+    try:
+        logger.info("Before subprocess")
+        proc = subprocess.Popen(
+            ["python3", "-m", "diffusionapi.generate"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        logger.info("After subprocess")
+        proc.stdin.write(json.dumps(job))
+        proc.stdin.close()
+        logger.info("After stdin")
+
+        # Start a thread to read and log the output
+        def log_output(pipe, prefix):
+            for line in pipe:
+                logger.info(f"{prefix}: {line.strip()}")
+
+        stdout_thread = threading.Thread(target=log_output, args=(proc.stdout, "STDOUT"))
+        stderr_thread = threading.Thread(target=log_output, args=(proc.stderr, "STDERR"))
+        stdout_thread.daemon = True
+        stderr_thread.daemon = True
+        stdout_thread.start()
+        stderr_thread.start()
+
+        logger.info(f"Job {job_id} dispatched to subprocess.")
+    except Exception as e:
+        logger.exception(f"Failed to start subprocess for job {job_id}")
+        with open(QUEUE_DIR / f"{job_id}.json", "w") as f:
+            json.dump({
+                "status": "error",
+                "progress": 0.0,
+                "job_id": job_id,
+                "detail": str(e)
+            }, f)
+        return {"status": "error", "detail": str(e)}
+
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "seed": payload.get("seed")  # This will be updated in status endpoint
+    }
+
 @app.get("/models")
 async def list_models():
     """List all available models with their user-friendly labels."""

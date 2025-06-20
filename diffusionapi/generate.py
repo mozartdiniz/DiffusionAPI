@@ -8,10 +8,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 from typing import List, Dict, Any
 import random
+import io
 
 import logging
 
-from diffusers import StableDiffusionPipeline, StableDiffusionXLPipeline
+from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
 from PIL import Image
 import torch
 
@@ -70,8 +71,8 @@ def is_huggingface_model(model_name: str) -> bool:
 
 def is_sdxl_pipeline(pipeline) -> bool:
     """Check if a pipeline is SDXL based on its type."""
-    from diffusers import StableDiffusionXLPipeline
-    return isinstance(pipeline, StableDiffusionXLPipeline)
+    from diffusers import StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
+    return isinstance(pipeline, (StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline))
 
 
 def is_sdxl_model(model_name: str) -> bool:
@@ -221,6 +222,7 @@ def main() -> None:
         sys.exit(1)
 
     job_id = data.get("job_id", "unknown")
+    job_type = data.get("type", "txt2img")  # Default to txt2img for backward compatibility
     prompt = data.get("prompt", "")
     negative_prompt = data.get("negative_prompt", "")
     steps = int(data.get("steps", 30))
@@ -236,6 +238,92 @@ def main() -> None:
     scheduler_key = scheduler_type.split()[0]
     scheduler = SCHEDULERS.get(scheduler_key, SCHEDULERS["karras"])
     seed = data.get("seed")
+    
+    # Img2Img specific parameters
+    input_image = None
+    denoising_strength = 0.75
+    resize_mode = 0  # Default: just resize
+    resize_to = None
+    resize_by = None
+    
+    if job_type == "img2img":
+        # Validate required img2img fields
+        if not data.get("image"):
+            logger.error("Img2Img job requires 'image' field")
+            update_progress_file(job_id, {
+                "status": "error",
+                "progress": 0,
+                "detail": "Img2Img job requires 'image' field"
+            })
+            sys.exit(1)
+        
+        # Decode base64 input image
+        try:
+            image_data = data.get("image")
+            if image_data.startswith("data:image/"):
+                # Handle data URL format
+                image_data = image_data.split(";")[1].split(",")[1]
+            
+            input_image_bytes = base64.b64decode(image_data)
+            input_image = Image.open(io.BytesIO(input_image_bytes)).convert("RGB")
+            logger.info(f"==> Loaded input image: {input_image.size}")
+        except Exception as e:
+            logger.error(f"Failed to decode input image: {e}")
+            update_progress_file(job_id, {
+                "status": "error",
+                "progress": 0,
+                "detail": f"Failed to decode input image: {str(e)}"
+            })
+            sys.exit(1)
+        
+        # Get img2img specific parameters
+        denoising_strength = float(data.get("denoising_strength", 0.75))
+        resize_mode = int(data.get("resize_mode", 0))
+        resize_to = data.get("resize_to")
+        resize_by = data.get("resize_by")
+        
+        # Handle resize parameters
+        if resize_to:
+            width = round_to_multiple_of_8(int(resize_to.get("width", width)))
+            height = round_to_multiple_of_8(int(resize_to.get("height", height)))
+            logger.info(f"==> Using resize_to: {resize_to} -> {width}x{height}")
+        elif resize_by:
+            original_width = input_image.width
+            original_height = input_image.height
+            width = round_to_multiple_of_8(int(original_width * resize_by.get("width", 1.0)))
+            height = round_to_multiple_of_8(int(original_height * resize_by.get("height", 1.0)))
+            logger.info(f"==> Using resize_by: {resize_by}")
+            logger.info(f"==> Original size: {original_width}x{original_height}")
+            logger.info(f"==> Calculated size: {width}x{height}")
+        elif resize_mode == 0:  # just resize
+            # Use the input image dimensions, rounded to multiple of 8
+            width = round_to_multiple_of_8(input_image.width)
+            height = round_to_multiple_of_8(input_image.height)
+            logger.info(f"==> Using resize_mode 0 (just resize): {width}x{height}")
+        elif resize_mode == 1:  # crop and resize
+            # Use the input image dimensions, rounded to multiple of 8
+            width = round_to_multiple_of_8(input_image.width)
+            height = round_to_multiple_of_8(input_image.height)
+            logger.info(f"==> Using resize_mode 1 (crop and resize): {width}x{height}")
+        elif resize_mode == 2:  # resize and fill
+            # Use the input image dimensions, rounded to multiple of 8
+            width = round_to_multiple_of_8(input_image.width)
+            height = round_to_multiple_of_8(input_image.height)
+            logger.info(f"==> Using resize_mode 2 (resize and fill): {width}x{height}")
+        else:
+            # Fallback: use the input image dimensions, rounded to multiple of 8
+            width = round_to_multiple_of_8(input_image.width)
+            height = round_to_multiple_of_8(input_image.height)
+            logger.info(f"==> Using fallback resize: {width}x{height}")
+        
+        # Ensure dimensions are never 0
+        if width <= 0 or height <= 0:
+            logger.warning(f"Invalid dimensions calculated: {width}x{height}, using input image dimensions")
+            width = round_to_multiple_of_8(input_image.width)
+            height = round_to_multiple_of_8(input_image.height)
+        
+        logger.info(f"==> Img2Img parameters: denoising_strength={denoising_strength}, resize_mode={resize_mode}")
+        logger.info(f"==> Final target dimensions: {width}x{height}")
     
     logger.info(f"==> Model name: {model_name}")
     logger.info(f"==> Is SDXL model: {is_sdxl_model(model_name)}")
@@ -271,6 +359,7 @@ def main() -> None:
     model_id = resolve_model_path(model_name)
     logger.info(f"==> Loading model: {model_name}")
     logger.info(f"==> Model path: {model_id}")
+    logger.info(f"==> Job type: {job_type}")
     
     # Try to determine if this should be an SDXL model
     should_be_sdxl = is_sdxl_model(model_name)
@@ -280,27 +369,49 @@ def main() -> None:
     if should_be_sdxl:
         logger.info("==> Detected as SDXL model, attempting SDXL pipeline first")
         try:
-            # Try with safetensors first
-            pipe = StableDiffusionXLPipeline.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                use_safetensors=True,
-                safety_checker=None
-            )
-            pipeline_type = "sdxl"
-            logger.info("==> Successfully loaded SDXL pipeline with safetensors")
-        except Exception as e:
-            logger.warning(f"Failed to load SDXL pipeline with safetensors: {e}")
-            try:
-                # Try with bin format as fallback
+            if job_type == "img2img":
+                # Use SDXL img2img pipeline for img2img jobs
+                pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=dtype,
+                    use_safetensors=True,
+                    safety_checker=None
+                )
+                pipeline_type = "sdxl_img2img"
+                logger.info("==> Successfully loaded SDXL img2img pipeline with safetensors")
+            else:
+                # Use SDXL txt2img pipeline for txt2img jobs
                 pipe = StableDiffusionXLPipeline.from_pretrained(
                     model_id,
                     torch_dtype=dtype,
-                    use_safetensors=False,
+                    use_safetensors=True,
                     safety_checker=None
                 )
                 pipeline_type = "sdxl"
-                logger.info("==> Successfully loaded SDXL pipeline with bin format")
+                logger.info("==> Successfully loaded SDXL txt2img pipeline with safetensors")
+        except Exception as e:
+            logger.warning(f"Failed to load SDXL pipeline with safetensors: {e}")
+            try:
+                if job_type == "img2img":
+                    # Try SDXL img2img pipeline with bin format as fallback
+                    pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                        model_id,
+                        torch_dtype=dtype,
+                        use_safetensors=False,
+                        safety_checker=None
+                    )
+                    pipeline_type = "sdxl_img2img"
+                    logger.info("==> Successfully loaded SDXL img2img pipeline with bin format")
+                else:
+                    # Try SDXL txt2img pipeline with bin format as fallback
+                    pipe = StableDiffusionXLPipeline.from_pretrained(
+                        model_id,
+                        torch_dtype=dtype,
+                        use_safetensors=False,
+                        safety_checker=None
+                    )
+                    pipeline_type = "sdxl"
+                    logger.info("==> Successfully loaded SDXL txt2img pipeline with bin format")
             except Exception as e2:
                 logger.warning(f"Failed to load SDXL pipeline with bin format: {e2}")
                 logger.info("==> Falling back to standard SD pipeline")
@@ -309,60 +420,104 @@ def main() -> None:
     if not should_be_sdxl or pipe is None:
         logger.info("==> Loading as standard SD pipeline")
         try:
-            # Try with safetensors first
-            pipe = StableDiffusionPipeline.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                use_safetensors=True,
-                safety_checker=None
-            )
-            pipeline_type = "standard"
-            logger.info("==> Successfully loaded standard SD pipeline with safetensors")
-        except Exception as e:
-            logger.error(f"Failed to load standard SD pipeline with safetensors: {e}")
-            try:
-                # Try with bin format as fallback
+            if job_type == "img2img":
+                # Use standard SD img2img pipeline for img2img jobs
+                pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                    model_id,
+                    torch_dtype=dtype,
+                    use_safetensors=True,
+                    safety_checker=None
+                )
+                pipeline_type = "standard_img2img"
+                logger.info("==> Successfully loaded standard SD img2img pipeline with safetensors")
+            else:
+                # Use standard SD txt2img pipeline for txt2img jobs
                 pipe = StableDiffusionPipeline.from_pretrained(
                     model_id,
                     torch_dtype=dtype,
-                    use_safetensors=False,
+                    use_safetensors=True,
                     safety_checker=None
                 )
                 pipeline_type = "standard"
-                logger.info("==> Successfully loaded standard SD pipeline with bin format")
+                logger.info("==> Successfully loaded standard SD txt2img pipeline with safetensors")
+        except Exception as e:
+            logger.error(f"Failed to load standard SD pipeline with safetensors: {e}")
+            try:
+                if job_type == "img2img":
+                    # Try standard SD img2img pipeline with bin format as fallback
+                    pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                        model_id,
+                        torch_dtype=dtype,
+                        use_safetensors=False,
+                        safety_checker=None
+                    )
+                    pipeline_type = "standard_img2img"
+                    logger.info("==> Successfully loaded standard SD img2img pipeline with bin format")
+                else:
+                    # Try standard SD txt2img pipeline with bin format as fallback
+                    pipe = StableDiffusionPipeline.from_pretrained(
+                        model_id,
+                        torch_dtype=dtype,
+                        use_safetensors=False,
+                        safety_checker=None
+                    )
+                    pipeline_type = "standard"
+                    logger.info("==> Successfully loaded standard SD txt2img pipeline with bin format")
             except Exception as e2:
                 logger.error(f"Failed to load standard SD pipeline with bin format: {e2}")
                 # If standard SD fails, try SDXL as last resort
-                if pipeline_type != "sdxl":
+                if pipeline_type not in ["sdxl", "sdxl_img2img"]:
                     logger.info("==> Trying SDXL pipeline as last resort")
                     try:
-                        # Try SDXL with safetensors first
-                        pipe = StableDiffusionXLPipeline.from_pretrained(
-                            model_id,
-                            torch_dtype=dtype,
-                            use_safetensors=True,
-                            safety_checker=None
-                        )
-                        pipeline_type = "sdxl"
-                        logger.info("==> Successfully loaded SDXL pipeline as fallback with safetensors")
-                    except Exception as e3:
-                        logger.warning(f"Failed to load SDXL pipeline as fallback with safetensors: {e3}")
-                        try:
-                            # Try SDXL with bin format as final fallback
+                        if job_type == "img2img":
+                            # Try SDXL img2img pipeline with safetensors first
+                            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                                model_id,
+                                torch_dtype=dtype,
+                                use_safetensors=True,
+                                safety_checker=None
+                            )
+                            pipeline_type = "sdxl_img2img"
+                            logger.info("==> Successfully loaded SDXL img2img pipeline as fallback with safetensors")
+                        else:
+                            # Try SDXL txt2img pipeline with safetensors first
                             pipe = StableDiffusionXLPipeline.from_pretrained(
                                 model_id,
                                 torch_dtype=dtype,
-                                use_safetensors=False,
+                                use_safetensors=True,
                                 safety_checker=None
                             )
                             pipeline_type = "sdxl"
-                            logger.info("==> Successfully loaded SDXL pipeline as fallback with bin format")
+                            logger.info("==> Successfully loaded SDXL txt2img pipeline as fallback with safetensors")
+                    except Exception as e3:
+                        logger.warning(f"Failed to load SDXL pipeline as fallback with safetensors: {e3}")
+                        try:
+                            if job_type == "img2img":
+                                # Try SDXL img2img pipeline with bin format as final fallback
+                                pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                                    model_id,
+                                    torch_dtype=dtype,
+                                    use_safetensors=False,
+                                    safety_checker=None
+                                )
+                                pipeline_type = "sdxl_img2img"
+                                logger.info("==> Successfully loaded SDXL img2img pipeline as fallback with bin format")
+                            else:
+                                # Try SDXL txt2img pipeline with bin format as final fallback
+                                pipe = StableDiffusionXLPipeline.from_pretrained(
+                                    model_id,
+                                    torch_dtype=dtype,
+                                    use_safetensors=False,
+                                    safety_checker=None
+                                )
+                                pipeline_type = "sdxl"
+                                logger.info("==> Successfully loaded SDXL txt2img pipeline as fallback with bin format")
                         except Exception as e4:
                             logger.error(f"Failed to load SDXL pipeline as fallback with bin format: {e4}")
                             raise Exception(f"Could not load model {model_name} as either standard SD or SDXL with any format: {e}")
     
-    # Optional: attach a refiner (only for SDXL)
-    if pipeline_type == "sdxl":
+    # Optional: attach a refiner (only for SDXL txt2img pipeline)
+    if pipeline_type in ["sdxl", "sdxl_img2img"] and job_type != "img2img":
         refiner_id = data.get("refiner_checkpoint")
         switch_at = float(data.get("refiner_switch_at", 0.8))
         if refiner_id:
@@ -500,132 +655,295 @@ def main() -> None:
     start_time = time.time()
 
     hires_enabled = bool(hires_cfg.get("enabled", False))
+    
+    # Define scale and upscaler variables for both paths
+    scale = float(hires_cfg.get("scale", 2.0))
+    upscaler_name = hires_cfg.get("upscaler", "Latent")
+    hires_steps = int(hires_cfg.get("steps", max(steps // 2, 1)))
+    hires_denoising_strength = float(hires_cfg.get("denoising_strength", 0.4))
 
     if not hires_enabled:
         # ░░ Simple, single pass ░░
-        logger.info("==> Standard generation (no hires)")
+        if job_type == "img2img":
+            logger.info("==> Standard img2img generation (no hires)")
+        else:
+            logger.info("==> Standard txt2img generation (no hires)")
+            
         generator = torch.Generator(device=device).manual_seed(seed)
         
-        # Prepare kwargs for pipeline call
-        pipeline_kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "num_inference_steps": steps,
-            "guidance_scale": cfg_scale,
-            "width": width,
-            "height": height,
-            "generator": generator,
-            "callback": callback,
-            "callback_steps": 1,
-        }
-        
-        # Add SDXL-specific parameters if using SDXL model
-        is_sdxl = (pipeline_type == "sdxl")
-        
-        if is_sdxl:
-            logger.info(f"==> Using SDXL pipeline for generation: {model_name}")
-            pipeline_kwargs["added_cond_kwargs"] = {
-                "text_embeds": None,
-                "time_ids": None
+        if job_type == "img2img" and input_image is not None:
+            # For img2img, use the dedicated img2img pipeline
+            logger.info(f"==> Using img2img pipeline with denoising_strength={denoising_strength}")
+            
+            # Resize input image to target dimensions if needed
+            if input_image.size != (width, height):
+                logger.info(f"==> Resizing input image from {input_image.size} to {width}x{height}")
+                input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
+            
+            # Ensure input image is RGB
+            if input_image.mode != "RGB":
+                input_image = input_image.convert("RGB")
+            
+            # Prepare kwargs for img2img pipeline call
+            pipeline_kwargs = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "image": input_image,
+                "strength": denoising_strength,
+                "num_inference_steps": steps,
+                "guidance_scale": cfg_scale,
+                "generator": generator,
+                "callback": callback,
+                "callback_steps": 1,
             }
-            logger.info(f"==> Added SDXL kwargs: {pipeline_kwargs['added_cond_kwargs']}")
+            
+            # Add SDXL-specific parameters if using SDXL img2img pipeline
+            if pipeline_type == "sdxl_img2img":
+                image_guidance_scale = float(data.get("image_guidance_scale", 1.5))
+                pipeline_kwargs["image_guidance_scale"] = image_guidance_scale
+                pipeline_kwargs["added_cond_kwargs"] = {"text_embeds": None, "time_ids": None}
+                logger.info(f"==> Added SDXL image_guidance_scale: {image_guidance_scale}")
+            
+            logger.info(f"==> Running img2img pipeline with strength={denoising_strength}, steps={steps}")
+            image = pipe(**pipeline_kwargs).images[0]
+            logger.info(f"==> Img2img generation complete")
         else:
-            logger.info(f"==> Using standard SD pipeline for generation: {model_name}")
-        
-        image = pipe(**pipeline_kwargs).images[0]
+            # Standard txt2img generation
+            pipeline_kwargs = {
+                "prompt": prompt,
+                "negative_prompt": negative_prompt,
+                "num_inference_steps": steps,
+                "guidance_scale": cfg_scale,
+                "width": width,
+                "height": height,
+                "generator": generator,
+                "callback": callback,
+                "callback_steps": 1,
+            }
+            
+            # Add SDXL-specific parameters if using SDXL txt2img pipeline
+            if pipeline_type == "sdxl":
+                pipeline_kwargs["added_cond_kwargs"] = {"text_embeds": None, "time_ids": None}
+                logger.info(f"==> Added SDXL kwargs for txt2img")
+            
+            image = pipe(**pipeline_kwargs).images[0]
     else:
         # ░░ Hi-Res Fix ░░
         logger.info("==> Hi-Res fix path enabled")
-
-        scale = float(hires_cfg.get("scale", 2.0))
-        upscaler_name = hires_cfg.get("upscaler", "Latent")
-        hires_steps = int(hires_cfg.get("steps", max(steps // 2, 1)))
-        denoising_strength = float(hires_cfg.get("denoising_strength", 0.4))
 
         # 7a. Generate base image (low-res)
         callback.phase = 'initial'  # Set initial phase
         generator = torch.Generator(device=device).manual_seed(seed)
         
-        # Prepare kwargs for initial pipeline call
-        initial_kwargs = {
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "num_inference_steps": steps,
-            "guidance_scale": cfg_scale,
-            "width": width,
-            "height": height,
-            "generator": generator,
-            "callback": callback,
-            "callback_steps": 1,
-        }
-        
-        # Add SDXL-specific parameters if using SDXL model
-        is_sdxl = (pipeline_type == "sdxl")
-        
-        if is_sdxl:
-            logger.info(f"==> Using SDXL pipeline for generation: {model_name}")
-            initial_kwargs["added_cond_kwargs"] = {
-                "text_embeds": None,
-                "time_ids": None
-            }
-            logger.info(f"==> Added SDXL kwargs: {initial_kwargs['added_cond_kwargs']}")
-        
-        lowres_image = pipe(**initial_kwargs).images[0]
-
-        # 7b. Upscale – latent or external
-        if upscaler_name.lower() == "latent":
-            logger.info("   ↳ Latent upscaling %sx, denoise %.2f", scale, denoising_strength)
-            # Calculate target dimensions and round to multiple of 8
-            target_width = round_to_multiple_of_8(int(width * scale))
-            target_height = round_to_multiple_of_8(int(height * scale))
-            logger.info(f"   ↳ Target dimensions (rounded to multiple of 8): {target_width}x{target_height}")
+        # Add img2img specific parameters for initial generation
+        if job_type == "img2img" and input_image is not None:
+            # Validate dimensions before resizing
+            if width <= 0 or height <= 0:
+                logger.error(f"Invalid dimensions for resizing: {width}x{height}")
+                update_progress_file(job_id, {
+                    "status": "error",
+                    "progress": 0,
+                    "detail": f"Invalid dimensions calculated: {width}x{height}"
+                })
+                sys.exit(1)
             
-            pipe.enable_vae_tiling()
-            callback.phase = 'upscaling'  # Set upscaling phase
-            generator = torch.Generator(device=device).manual_seed(seed)
+            # Resize input image if needed
+            if input_image.size != (width, height):
+                logger.info(f"==> Resizing input image from {input_image.size} to {width}x{height}")
+                input_image = input_image.resize((width, height), Image.Resampling.LANCZOS)
             
-            # Prepare kwargs for upscaling pipeline call
-            upscale_kwargs = {
+            # Ensure input image is RGB
+            if input_image.mode != "RGB":
+                input_image = input_image.convert("RGB")
+            
+            # For img2img, we need to create a new img2img pipeline for the initial generation
+            # since we're using the txt2img pipeline for hires fix
+            logger.info(f"==> Creating img2img pipeline for initial generation")
+            
+            try:
+                if pipeline_type == "sdxl":
+                    # Create SDXL img2img pipeline for initial generation
+                    img2img_pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                        model_id,
+                        torch_dtype=dtype,
+                        use_safetensors=True,
+                        safety_checker=None
+                    )
+                    img2img_pipe = img2img_pipe.to(device)
+                    # Copy scheduler from main pipeline
+                    img2img_pipe.scheduler = pipe.scheduler
+                    logger.info(f"==> Created SDXL img2img pipeline for initial generation")
+                else:
+                    # Create standard SD img2img pipeline for initial generation
+                    img2img_pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                        model_id,
+                        torch_dtype=dtype,
+                        use_safetensors=True,
+                        safety_checker=None
+                    )
+                    img2img_pipe = img2img_pipe.to(device)
+                    # Copy scheduler from main pipeline
+                    img2img_pipe.scheduler = pipe.scheduler
+                    logger.info(f"==> Created standard SD img2img pipeline for initial generation")
+                
+                # Load LoRAs into the img2img pipeline
+                load_loras(img2img_pipe, loras, model_name)
+                
+                # Prepare kwargs for img2img initial generation
+                initial_kwargs = {
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "image": input_image,
+                    "strength": denoising_strength,
+                    "num_inference_steps": steps,
+                    "guidance_scale": cfg_scale,
+                    "generator": generator,
+                    "callback": callback,
+                    "callback_steps": 1,
+                }
+                
+                # Add SDXL-specific parameters if using SDXL img2img pipeline
+                if pipeline_type == "sdxl":
+                    image_guidance_scale = float(data.get("image_guidance_scale", 1.5))
+                    initial_kwargs["image_guidance_scale"] = image_guidance_scale
+                    initial_kwargs["added_cond_kwargs"] = {"text_embeds": None, "time_ids": None}
+                    logger.info(f"==> Added SDXL image_guidance_scale for initial generation: {image_guidance_scale}")
+                
+                logger.info(f"==> Running img2img pipeline for initial generation with strength={denoising_strength}")
+                image = img2img_pipe(**initial_kwargs).images[0]
+                logger.info(f"==> Initial img2img generation complete")
+                
+            except Exception as e:
+                logger.error(f"Failed to create img2img pipeline for initial generation: {e}")
+                # Fallback to using the main pipeline with img2img approach
+                logger.info(f"==> Falling back to main pipeline with img2img approach")
+                
+                initial_kwargs.update({
+                    "image": input_image,
+                    "strength": denoising_strength,
+                })
+                
+                # Add SDXL-specific parameters if using SDXL model
+                if pipeline_type == "sdxl":
+                    initial_kwargs["added_cond_kwargs"] = {
+                        "text_embeds": None,
+                        "time_ids": None
+                    }
+                    image_guidance_scale = float(data.get("image_guidance_scale", 1.5))
+                    initial_kwargs["image_guidance_scale"] = image_guidance_scale
+                    logger.info(f"==> Added SDXL image_guidance_scale for fallback: {image_guidance_scale}")
+                
+                image = pipe(**initial_kwargs).images[0]
+        else:
+            # Standard txt2img generation for initial hires fix
+            # Prepare kwargs for initial pipeline call
+            initial_kwargs = {
                 "prompt": prompt,
                 "negative_prompt": negative_prompt,
-                "image": lowres_image,
-                "strength": denoising_strength,
-                "num_inference_steps": hires_steps,
+                "num_inference_steps": steps,
                 "guidance_scale": cfg_scale,
-                "width": target_width,
-                "height": target_height,
+                "width": width,
+                "height": height,
                 "generator": generator,
                 "callback": callback,
                 "callback_steps": 1,
             }
             
             # Add SDXL-specific parameters if using SDXL model
-            is_sdxl = (pipeline_type == "sdxl")
-            
-            if is_sdxl:
-                logger.info(f"==> Using SDXL pipeline for generation: {model_name}")
-                upscale_kwargs["added_cond_kwargs"] = {
+            if pipeline_type == "sdxl":
+                initial_kwargs["added_cond_kwargs"] = {
                     "text_embeds": None,
                     "time_ids": None
                 }
-                logger.info(f"==> Added SDXL kwargs: {upscale_kwargs['added_cond_kwargs']}")
+                logger.info(f"==> Added SDXL kwargs for txt2img initial generation")
+
+            # Log all pipeline parameters for debugging
+            logger.info(f"==> Pipeline parameters:")
+            logger.info(f"   - Prompt: {prompt[:100]}...")
+            logger.info(f"   - Negative prompt: {negative_prompt[:100]}...")
+            logger.info(f"   - Steps: {steps}")
+            logger.info(f"   - CFG Scale: {cfg_scale}")
+            logger.info(f"   - Width: {width}")
+            logger.info(f"   - Height: {height}")
+            if job_type == "img2img":
+                logger.info(f"   - Denoising strength: {denoising_strength}")
+                logger.info(f"   - Input image size: {input_image.size if input_image else 'None'}")
+            logger.info(f"   - Scheduler: {pipe.scheduler.__class__.__name__}")
+            logger.info(f"   - Model: {model_name}")
+
+            image = pipe(**initial_kwargs).images[0]
+
+    # ------------------------------------------------------------------
+    # 7.  Upscale – latent or external
+    # ------------------------------------------------------------------
+    if scale > 1.0 and hires_enabled:
+        logger.info("   ↳ Upscaling %sx", scale)
+        
+        if upscaler_name.lower() == "latent":
+            logger.info("   ↳ Latent upscaling %sx, denoise %.2f", scale, hires_denoising_strength)
+            # Calculate target dimensions and round to multiple of 8
+            target_width = round_to_multiple_of_8(int(width * scale))
+            target_height = round_to_multiple_of_8(int(height * scale))
+            logger.info(f"   ↳ Target dimensions (rounded to multiple of 8): {target_width}x{target_height}")
             
-            image = pipe(**upscale_kwargs).images[0]
+            callback.phase = 'upscaling'  # Set upscaling phase
+            generator = torch.Generator(device=device).manual_seed(seed)
+            
+            # For SDXL img2img pipelines, we need to handle large images carefully
+            if pipeline_type == "sdxl_img2img" and (target_width > 1024 or target_height > 1024):
+                logger.info("   ↳ Large image detected for SDXL img2img, using external upscaler instead")
+                # Use external upscaler for large SDXL img2img images to avoid VAE issues
+                image = upscale_image(image, scale=scale, upscaler_name="Latent")
+            else:
+                # Use the main pipeline for upscaling
+                pipe.enable_vae_tiling()
+                
+                # Prepare kwargs for upscaling pipeline call
+                upscale_kwargs = {
+                    "prompt": prompt,
+                    "negative_prompt": negative_prompt,
+                    "image": image,
+                    "strength": hires_denoising_strength,
+                    "num_inference_steps": hires_steps,
+                    "guidance_scale": cfg_scale,
+                    "width": target_width,
+                    "height": target_height,
+                    "generator": generator,
+                    "callback": callback,
+                    "callback_steps": 1,
+                }
+                
+                # Add SDXL-specific parameters if using SDXL model
+                if pipeline_type in ["sdxl", "sdxl_img2img"]:
+                    upscale_kwargs["added_cond_kwargs"] = {
+                        "text_embeds": None,
+                        "time_ids": None
+                    }
+                    
+                    # For SDXL models, add image_guidance_scale for better fidelity
+                    image_guidance_scale = float(data.get("image_guidance_scale", 1.5))
+                    upscale_kwargs["image_guidance_scale"] = image_guidance_scale
+                    logger.info(f"==> Added SDXL image_guidance_scale for upscaling: {image_guidance_scale}")
+                
+                logger.info(f"==> Hires upscaling parameters: strength={hires_denoising_strength}")
+                
+                # Generate the upscaled image
+                image = pipe(**upscale_kwargs).images[0]
         else:
             logger.info("   ↳ External upscaler '%s' (%sx)", upscaler_name, scale)
             # Debug logging for input image
-            lowres_array = np.array(lowres_image)
+            lowres_array = np.array(image)
             logger.info(f"Lowres image before upscale - shape: {lowres_array.shape}, dtype: {lowres_array.dtype}")
             logger.info(f"Lowres image range - min: {lowres_array.min()}, max: {lowres_array.max()}, mean: {lowres_array.mean():.2f}")
-            logger.info(f"Lowres image mode: {lowres_image.mode}")
+            logger.info(f"Lowres image mode: {image.mode}")
             
             # Check if image is grayscale
             if len(lowres_array.shape) == 2 or (len(lowres_array.shape) == 3 and lowres_array.shape[2] == 1):
                 logger.warning("Input image appears to be grayscale! Converting to RGB...")
-                lowres_image = lowres_image.convert('RGB')
+                image = image.convert('RGB')
             
             generator = torch.Generator(device=device).manual_seed(seed)
-            image = upscale_image(lowres_image, scale=scale, upscaler_name=upscaler_name)
+            image = upscale_image(image, scale=scale, upscaler_name=upscaler_name)
             
             # Debug logging for output image
             upscaled_array = np.array(image)
@@ -648,6 +966,24 @@ def main() -> None:
     jpeg_quality = data.get("jpeg_quality", 85)
     
     # Create metadata infotext in the same format as Stable Diffusion web UI
+    extra_params = {
+        "LoRAs": ", ".join([f"{lora['name']}:{lora['scale']}" for lora in loras]) if loras else None,
+        "Memory before": f"{memory_before:.1f} MB",
+        "Memory after": f"{memory_after:.1f} MB",
+        "Generation time": f"{elapsed_time:.2f}s",
+    }
+    
+    # Add img2img specific parameters
+    if job_type == "img2img":
+        extra_params.update({
+            "Denoising strength": f"{denoising_strength:.2f}",
+            "Resize mode": resize_mode,
+        })
+        if resize_to:
+            extra_params["Resize to"] = f"{resize_to.get('width', '?')}x{resize_to.get('height', '?')}"
+        elif resize_by:
+            extra_params["Resize by"] = f"{resize_by.get('width', '?')}x{resize_by.get('height', '?')}"
+    
     geninfo = create_infotext(
         prompt=prompt,
         negative_prompt=negative_prompt,
@@ -662,16 +998,11 @@ def main() -> None:
         model_hash="",  # You can add model hash if available
         vae_name="",    # You can add VAE name if available
         vae_hash="",    # You can add VAE hash if available
-        denoising_strength=data.get("denoising_strength"),
+        denoising_strength=denoising_strength if job_type == "img2img" else None,
         clip_skip=data.get("clip_skip"),
         tiling=data.get("tiling", False),
         restore_faces=data.get("restore_faces", False),
-        extra_generation_params={
-            "LoRAs": ", ".join([f"{lora['name']}:{lora['scale']}" for lora in loras]) if loras else None,
-            "Memory before": f"{memory_before:.1f} MB",
-            "Memory after": f"{memory_after:.1f} MB",
-            "Generation time": f"{elapsed_time:.2f}s",
-        },
+        extra_generation_params=extra_params,
         user=data.get("user"),
         version="DiffusionAPI v1.0"
     )
@@ -690,7 +1021,7 @@ def main() -> None:
         image_b64 = base64.b64encode(f.read()).decode("utf-8")
 
     # Keep status as processing until we have the image data
-    update_progress_file(job_id, {
+    progress_data = {
         "status": "processing",  # Keep as processing until we have the image
         "progress": 1.0,
         "image": image_b64,
@@ -709,7 +1040,20 @@ def main() -> None:
         "memory_after_mb": memory_after,
         "generation_time_sec": elapsed_time,
         "seed": seed  # Only include the actual seed value used
-    })
+    }
+    
+    # Add img2img specific data
+    if job_type == "img2img":
+        progress_data.update({
+            "denoising_strength": denoising_strength,
+            "resize_mode": resize_mode,
+        })
+        if resize_to:
+            progress_data["resize_to"] = resize_to
+        if resize_by:
+            progress_data["resize_by"] = resize_by
+    
+    update_progress_file(job_id, progress_data)
 
     logger.info("==> Job %s finished in %.2fs (mem %.1f → %.1f MB)", job_id, elapsed_time, memory_before, memory_after)
 
