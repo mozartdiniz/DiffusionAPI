@@ -57,6 +57,18 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_DIR.mkdir(parents=True, exist_ok=True)
 LORAS_DIR.mkdir(parents=True, exist_ok=True)
 
+def sanitize_payload_for_logging(payload):
+    """Remove sensitive data like base64 images from payload for logging."""
+    sanitized = payload.copy()
+    
+    # Remove base64 image data
+    if "image" in sanitized:
+        image_data = sanitized["image"]
+        if isinstance(image_data, str) and (image_data.startswith("data:image/") or len(image_data) > 100):
+            sanitized["image"] = f"[BASE64_IMAGE_DATA_{len(image_data)}_chars]"
+    
+    return sanitized
+
 @app.get("/hello")
 async def hello():
     return {"ok": True}
@@ -166,7 +178,7 @@ async def txt2img(request: Request):
     logger.info("Received txt2img request:")
     logger.info(f"Job ID: {job_id}")
     logger.info("Payload:")
-    logger.info(json.dumps(payload, indent=2))    
+    logger.info(json.dumps(sanitize_payload_for_logging(payload), indent=2))    
     
     # Get file type from payload, default to jpg
     file_type = payload.get("fileType", "jpg").lower()
@@ -254,9 +266,9 @@ async def txt2img(request: Request):
     with open(QUEUE_DIR / f"{job_id}.json", "w") as f:
         json.dump({"status": "queued", "progress": 0.0, "job_id": job_id}, f)
     
-    # Save the full job payload
+    # Save the full job payload (sanitized for file storage)
     with open(QUEUE_DIR / f"{job_id}_job.json", "w") as f:
-        json.dump(job, f)
+        json.dump(sanitize_payload_for_logging(job), f)
 
     try:
         logger.info("Before subprocess")
@@ -268,7 +280,7 @@ async def txt2img(request: Request):
             text=True
         )
         logger.info("After subprocess")
-        proc.stdin.write(json.dumps(job))
+        proc.stdin.write(json.dumps(job))  # Send original job with base64 data to subprocess
         proc.stdin.close()
         logger.info("After stdin")
 
@@ -311,7 +323,7 @@ async def img2img(request: Request):
     logger.info("Received img2img request:")
     logger.info(f"Job ID: {job_id}")
     logger.info("Payload:")
-    logger.info(json.dumps(payload, indent=2))    
+    logger.info(json.dumps(sanitize_payload_for_logging(payload), indent=2))    
     
     # Validate required fields
     if not payload.get("image"):
@@ -443,9 +455,9 @@ async def img2img(request: Request):
     with open(QUEUE_DIR / f"{job_id}.json", "w") as f:
         json.dump({"status": "queued", "progress": 0.0, "job_id": job_id}, f)
     
-    # Save the full job payload
+    # Save the full job payload (sanitized for file storage)
     with open(QUEUE_DIR / f"{job_id}_job.json", "w") as f:
-        json.dump(job, f)
+        json.dump(sanitize_payload_for_logging(job), f)
 
     try:
         logger.info("Before subprocess")
@@ -457,7 +469,7 @@ async def img2img(request: Request):
             text=True
         )
         logger.info("After subprocess")
-        proc.stdin.write(json.dumps(job))
+        proc.stdin.write(json.dumps(job))  # Send original job with base64 data to subprocess
         proc.stdin.close()
         logger.info("After stdin")
 

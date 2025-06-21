@@ -523,4 +523,176 @@ curl http://localhost:8000/models/aliases
 
 **Python script:**
 
+```python
+import requests
+
+response = requests.get("http://localhost:8000/models/aliases")
+models = response.json()
+for model in models['models']:
+    print(f"{model['label']} → {model['name']}")
 ```
+
+## API Endpoints
+
+### `POST /txt2img`
+
+Generate images from text prompts.
+
+**Request Body:** `Txt2ImgRequest`
+
+**Response:** `Txt2ImgResponse`
+
+**Example Request:**
+
+```json
+{
+  "prompt": "a beautiful landscape, high quality, detailed",
+  "negative_prompt": "blurry, low quality, distorted",
+  "steps": 30,
+  "cfg_scale": 7.0,
+  "width": 512,
+  "height": 512,
+  "model": "stabilityai/stable-diffusion-xl-base-1.0",
+  "sampler_name": "DPM++ 2M Karras",
+  "fileType": "png",
+  "refiner_checkpoint": "stabilityai/stable-diffusion-xl-refiner-1.0",
+  "refiner_switch_at": 0.8,
+  "seed": 42
+}
+```
+
+### `POST /img2img`
+
+Generate images from input images with optional refiner support.
+
+**Request Body:** `Img2ImgRequest`
+
+**Response:** `Img2ImgResponse`
+
+**Example Request:**
+
+```json
+{
+  "prompt": "a futuristic cityscape with neon lights, cyberpunk style",
+  "negative_prompt": "blurry, low quality, distorted",
+  "image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA...",
+  "steps": 30,
+  "cfg_scale": 7.0,
+  "denoising_strength": 0.7,
+  "width": 512,
+  "height": 512,
+  "model": "stabilityai/stable-diffusion-xl-base-1.0",
+  "sampler_name": "DPM++ 2M Karras",
+  "fileType": "png",
+  "refiner_checkpoint": "stabilityai/stable-diffusion-xl-refiner-1.0",
+  "refiner_switch_at": 0.8,
+  "seed": 42
+}
+```
+
+**Key Features:**
+
+- **Refiner Support**: Both txt2img and img2img endpoints support SDXL refiners using the same API signature
+- **Consistent Parameters**: `refiner_checkpoint` and `refiner_switch_at` work identically for both endpoints
+- **SDXL Only**: Refiner support is only available for SDXL models
+- **Switch Control**: `refiner_switch_at` controls when to switch to the refiner (0.8 = 80% of steps)
+
+### `GET /queue/{job_id}`
+
+Get the status of a generation job.
+
+**Response:** `QueueStatusResponse`
+
+**Example Response:**
+
+```json
+{
+  "status": "success",
+  "job_id": "abc123",
+  "progress": 75.5,
+  "current_phase": "upscaling",
+  "state": "processing",
+  "output_path": "/path/to/generated/image.png",
+  "width": 1024,
+  "height": 1024,
+  "file_type": "png",
+  "generation_time_sec": 45.2,
+  "memory_before_mb": 2048.5,
+  "memory_after_mb": 3072.1,
+  "seed": 42
+}
+```
+
+## Refiner Support
+
+The DiffusionAPI supports SDXL refiners for both text-to-image and image-to-image generation. Refiners improve image quality by processing the generation at a specific step threshold.
+
+### Refiner Parameters
+
+- **`refiner_checkpoint`** (optional): Path or name of the SDXL refiner model
+- **`refiner_switch_at`** (optional, default: 0.8): When to switch to the refiner (0.0-1.0)
+
+### Supported Refiner Models
+
+- `stabilityai/stable-diffusion-xl-refiner-1.0` - Official SDXL refiner
+- Any custom SDXL refiner model in your models directory
+
+### Usage Examples
+
+**Text-to-Image with Refiner:**
+
+```python
+import requests
+
+payload = {
+    "prompt": "a beautiful landscape",
+    "model": "stabilityai/stable-diffusion-xl-base-1.0",
+    "refiner_checkpoint": "stabilityai/stable-diffusion-xl-refiner-1.0",
+    "refiner_switch_at": 0.8,
+    "steps": 30
+}
+
+response = requests.post("http://localhost:8000/txt2img", json=payload)
+```
+
+**Image-to-Image with Refiner:**
+
+```python
+import requests
+import base64
+from PIL import Image
+import io
+
+# Load and encode input image
+image = Image.open("input.png")
+buffer = io.BytesIO()
+image.save(buffer, format='PNG')
+image_b64 = f"data:image/png;base64,{base64.b64encode(buffer.getvalue()).decode()}"
+
+payload = {
+    "prompt": "a futuristic cityscape",
+    "image": image_b64,
+    "model": "stabilityai/stable-diffusion-xl-base-1.0",
+    "refiner_checkpoint": "stabilityai/stable-diffusion-xl-refiner-1.0",
+    "refiner_switch_at": 0.8,
+    "denoising_strength": 0.7,
+    "steps": 30
+}
+
+response = requests.post("http://localhost:8000/img2img", json=payload)
+```
+
+### Refiner Best Practices
+
+1. **Use SDXL Models**: Refiners only work with SDXL models
+2. **Optimal Switch Point**: 0.8 (80%) is generally optimal for most use cases
+3. **Step Count**: Use at least 20-30 steps for best results with refiners
+4. **Memory Usage**: Refiners increase memory usage, ensure sufficient GPU memory
+
+## Examples
+
+See the following example scripts for complete usage examples:
+
+- `example_img2img_refiner.py` - Img2img with refiner support
+- `test_img2img_refiner.py` - Test script for refiner functionality
+- `example_usage.py` - General usage examples

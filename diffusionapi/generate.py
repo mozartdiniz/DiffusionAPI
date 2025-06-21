@@ -195,8 +195,20 @@ def get_memory_usage() -> float:
 
 
 def round_to_multiple_of_8(value: int) -> int:
-    """Round a value to the nearest multiple of 8."""
-    return round(value / 8) * 8
+    """Round value to nearest multiple of 8."""
+    return ((value + 4) // 8) * 8
+
+def sanitize_payload_for_logging(data):
+    """Remove sensitive data like base64 images from payload for logging."""
+    sanitized = data.copy()
+    
+    # Remove base64 image data
+    if "image" in sanitized:
+        image_data = sanitized["image"]
+        if isinstance(image_data, str) and (image_data.startswith("data:image/") or len(image_data) > 100):
+            sanitized["image"] = f"[BASE64_IMAGE_DATA_{len(image_data)}_chars]"
+    
+    return sanitized
 
 ###############################################################################
 # Main entry
@@ -211,7 +223,7 @@ def main() -> None:
     try:
         data = json.load(sys.stdin)
         logger.info("==> Received payload:")
-        logger.info(json.dumps(data, indent=2)) 
+        logger.info(json.dumps(sanitize_payload_for_logging(data), indent=2)) 
     except Exception as e:
         logger.exception("Failed to load JSON from stdin")
         update_progress_file("unknown", {
@@ -516,8 +528,8 @@ def main() -> None:
                             logger.error(f"Failed to load SDXL pipeline as fallback with bin format: {e4}")
                             raise Exception(f"Could not load model {model_name} as either standard SD or SDXL with any format: {e}")
     
-    # Optional: attach a refiner (only for SDXL txt2img pipeline)
-    if pipeline_type in ["sdxl", "sdxl_img2img"] and job_type != "img2img":
+    # Optional: attach a refiner (for SDXL txt2img and img2img pipelines)
+    if pipeline_type in ["sdxl", "sdxl_img2img"]:
         refiner_id = data.get("refiner_checkpoint")
         switch_at = float(data.get("refiner_switch_at", 0.8))
         if refiner_id:
@@ -788,6 +800,12 @@ def main() -> None:
                 
                 # Load LoRAs into the img2img pipeline
                 load_loras(img2img_pipe, loras, model_name)
+                
+                # Attach refiner to img2img pipeline if available
+                if hasattr(pipe, 'refiner') and pipe.refiner is not None:
+                    logger.info("==> Attaching refiner to img2img pipeline")
+                    img2img_pipe.refiner = pipe.refiner
+                    img2img_pipe.refiner_inference_steps = pipe.refiner_inference_steps
                 
                 # Prepare kwargs for img2img initial generation
                 initial_kwargs = {
