@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import torch
 from PIL import Image
+import time
+import psutil
 
 from diffusionapi.upscalers import INTERNAL_UPSCALERS, UPSCALER_DIR
 from diffusionapi.generate import get_model_labels, get_model_name_from_label
@@ -72,6 +74,117 @@ def sanitize_payload_for_logging(payload):
 @app.get("/hello")
 async def hello():
     return {"ok": True}
+
+@app.get("/health")
+async def health_check():
+    """Comprehensive health check endpoint."""
+    try:
+        # Get system information
+        system_info = {
+            "cpu_count": psutil.cpu_count(),
+            "memory_total_gb": round(psutil.virtual_memory().total / (1024**3), 2),
+            "memory_available_gb": round(psutil.virtual_memory().available / (1024**3), 2),
+            "memory_percent": psutil.virtual_memory().percent,
+            "disk_usage_percent": psutil.disk_usage('/').percent
+        }
+        
+        # Get GPU information
+        gpu_info = {}
+        if torch.cuda.is_available():
+            gpu_info = {
+                "cuda_available": True,
+                "cuda_version": torch.version.cuda,
+                "gpu_count": torch.cuda.device_count(),
+                "current_device": torch.cuda.current_device(),
+                "device_name": torch.cuda.get_device_name(0),
+                "memory_allocated_gb": round(torch.cuda.memory_allocated(0) / (1024**3), 2),
+                "memory_reserved_gb": round(torch.cuda.memory_reserved(0) / (1024**3), 2)
+            }
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            gpu_info = {
+                "mps_available": True,
+                "device_name": "Apple Silicon GPU"
+            }
+        else:
+            gpu_info = {
+                "cuda_available": False,
+                "mps_available": False,
+                "device_name": "CPU"
+            }
+        
+        # Get model information
+        models_count = 0
+        if MODELS_DIR.exists():
+            models_count = len([d for d in MODELS_DIR.iterdir() if d.is_dir()])
+        
+        loras_count = 0
+        if LORAS_DIR.exists():
+            loras_count = len(list(LORAS_DIR.glob("*.safetensors")))
+        
+        # Get queue status
+        queue_files = list(QUEUE_DIR.glob("*.json"))
+        active_jobs = len([f for f in queue_files if not f.name.endswith("_job.json")])
+        
+        # Check if outputs directory exists and has space
+        outputs_available = OUTPUT_DIR.exists()
+        outputs_space_gb = 0
+        if outputs_available:
+            outputs_space_gb = round(psutil.disk_usage(str(OUTPUT_DIR)).free / (1024**3), 2)
+        
+        health_status = {
+            "status": "healthy",
+            "timestamp": time.time(),
+            "version": "1.0.0",
+            "system": system_info,
+            "gpu": gpu_info,
+            "models": {
+                "count": models_count,
+                "directory": str(MODELS_DIR)
+            },
+            "loras": {
+                "count": loras_count,
+                "directory": str(LORAS_DIR)
+            },
+            "queue": {
+                "active_jobs": active_jobs,
+                "directory": str(QUEUE_DIR)
+            },
+            "outputs": {
+                "available": outputs_available,
+                "free_space_gb": outputs_space_gb,
+                "directory": str(OUTPUT_DIR)
+            }
+        }
+        
+        # Check for potential issues
+        warnings = []
+        if system_info["memory_percent"] > 90:
+            warnings.append("High memory usage")
+        if system_info["disk_usage_percent"] > 90:
+            warnings.append("High disk usage")
+        if models_count == 0:
+            warnings.append("No models found")
+        if not outputs_available:
+            warnings.append("Outputs directory not accessible")
+        if outputs_space_gb < 1:
+            warnings.append("Low disk space for outputs")
+        
+        if warnings:
+            health_status["status"] = "warning"
+            health_status["warnings"] = warnings
+        
+        return health_status
+        
+    except Exception as e:
+        logger.exception("Health check failed")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "timestamp": time.time()
+            }
+        )
 
 @app.get("/queue/{job_id}")
 async def get_queue_status(job_id: str):
@@ -346,40 +459,9 @@ async def img2img(request: Request):
     # Set output path with correct extension
     output_path = str(Path("outputs") / f"{job_id}.{file_type}")
 
-    # Handle loras
-    loras = payload.get("loras", [])
-    if not isinstance(loras, list):
-        loras = []
-
-    normalized_loras = []
-    for entry in loras:
-        if isinstance(entry, dict) and "name" in entry:
-            # Get the lora name and verify it exists
-            lora_name = entry["name"]
-            lora_path = LORAS_DIR / f"{lora_name}.safetensors"
-            
-            if not lora_path.exists():
-                logger.warning(f"LoRA not found: {lora_name}")
-                continue
-                
-            normalized_loras.append({
-                "name": lora_name,
-                "path": str(lora_path),
-                "scale": float(entry.get("scale", 1.0))
-            })
-        elif isinstance(entry, str):
-            # Handle simple string lora names
-            lora_path = LORAS_DIR / f"{entry}.safetensors"
-            
-            if not lora_path.exists():
-                logger.warning(f"LoRA not found: {entry}")
-                continue
-                
-            normalized_loras.append({
-                "name": entry,
-                "path": str(lora_path),
-                "scale": 1.0
-            })
+    # Handle loras - IGNORE LoRAs for img2img to avoid compatibility issues
+    logger.info("==> Ignoring LoRAs for img2img to prevent compatibility issues")
+    normalized_loras = []  # Always empty for img2img
 
     payload["loras"] = normalized_loras
 
@@ -422,7 +504,7 @@ async def img2img(request: Request):
         "output": output_path,
         "file_type": file_type,
         "jpeg_quality": payload.get("jpeg_quality", 85),
-        "loras": normalized_loras,
+        "loras": normalized_loras,  # Empty list - LoRAs ignored for img2img
         "sampler_name": payload.get("sampler_name", "DPM++ 2M Karras"),
         "scheduler_type": payload.get("scheduler_type", "karras"),
         "seed": payload.get("seed"),  # This will be modified by generate.py if needed

@@ -297,6 +297,106 @@ type HelloResponse = {
 };
 ```
 
+#### `GET /health`
+
+Comprehensive health check endpoint that provides system status, resource usage, and configuration information.
+
+**Response:**
+
+```typescript
+type HealthResponse = {
+  status: "healthy" | "warning" | "error";
+  timestamp: number;
+  version: string;
+  system: {
+    cpu_count: number;
+    memory_total_gb: number;
+    memory_available_gb: number;
+    memory_percent: number;
+    disk_usage_percent: number;
+  };
+  gpu: {
+    cuda_available?: boolean;
+    cuda_version?: string;
+    gpu_count?: number;
+    current_device?: number;
+    device_name: string;
+    memory_allocated_gb?: number;
+    memory_reserved_gb?: number;
+    mps_available?: boolean;
+  };
+  models: {
+    count: number;
+    directory: string;
+  };
+  loras: {
+    count: number;
+    directory: string;
+  };
+  queue: {
+    active_jobs: number;
+    directory: string;
+  };
+  outputs: {
+    available: boolean;
+    free_space_gb: number;
+    directory: string;
+  };
+  warnings?: string[];
+  error?: string;
+};
+```
+
+**Example Response:**
+
+```json
+{
+  "status": "healthy",
+  "timestamp": 1703123456.789,
+  "version": "1.0.0",
+  "system": {
+    "cpu_count": 8,
+    "memory_total_gb": 16.0,
+    "memory_available_gb": 8.5,
+    "memory_percent": 47.0,
+    "disk_usage_percent": 65.0
+  },
+  "gpu": {
+    "cuda_available": true,
+    "cuda_version": "11.8",
+    "gpu_count": 1,
+    "current_device": 0,
+    "device_name": "NVIDIA GeForce RTX 3080",
+    "memory_allocated_gb": 2.1,
+    "memory_reserved_gb": 3.5
+  },
+  "models": {
+    "count": 5,
+    "directory": "/path/to/stable_diffusion/models"
+  },
+  "loras": {
+    "count": 12,
+    "directory": "/path/to/stable_diffusion/loras"
+  },
+  "queue": {
+    "active_jobs": 0,
+    "directory": "/path/to/queue"
+  },
+  "outputs": {
+    "available": true,
+    "free_space_gb": 45.2,
+    "directory": "/path/to/outputs"
+  }
+}
+```
+
+**Usage:**
+
+- **Monitoring**: Use this endpoint to monitor system health and resource usage
+- **Alerts**: Check the `status` field for "warning" or "error" states
+- **Capacity Planning**: Monitor memory, disk usage, and GPU memory
+- **Troubleshooting**: Review warnings and error messages for issues
+
 #### `GET /models`
 
 List all available models with their user-friendly labels.
@@ -568,6 +668,8 @@ Generate images from input images with optional refiner support.
 **Request Body:** `Img2ImgRequest`
 
 **Response:** `Img2ImgResponse`
+
+**Important Note:** LoRAs are automatically ignored for img2img requests to prevent compatibility issues. This ensures reliable image generation without LoRA-related errors.
 
 **Example Request:**
 

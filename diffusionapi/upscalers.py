@@ -1,4 +1,5 @@
 import os
+import warnings
 from PIL import Image
 from pathlib import Path
 import logging
@@ -8,6 +9,10 @@ from torchvision.transforms.functional import to_tensor, to_pil_image
 from diffusers.utils.torch_utils import is_compiled_module
 import tqdm
 import cv2
+
+# Suppress torchvision warnings
+warnings.filterwarnings("ignore", message="Failed to load image Python extension")
+warnings.filterwarnings("ignore", message="The torchvision.transforms.functional_tensor module is deprecated")
 
 logger = logging.getLogger(__name__)
 

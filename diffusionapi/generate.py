@@ -6,18 +6,36 @@ import time
 import psutil
 from pathlib import Path
 from dotenv import load_dotenv
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 import random
 import io
+import gc
+import warnings
 
-import logging
+# Suppress torchvision warnings
+warnings.filterwarnings("ignore", message="Failed to load image Python extension")
+warnings.filterwarnings("ignore", message="The torchvision.transforms.functional_tensor module is deprecated")
 
 from diffusers import StableDiffusionPipeline, StableDiffusionImg2ImgPipeline, StableDiffusionXLPipeline, StableDiffusionXLImg2ImgPipeline
+from diffusers.utils import logging
+from diffusers import (
+    DPMSolverMultistepScheduler,
+    EulerDiscreteScheduler,
+    EulerAncestralDiscreteScheduler,
+    HeunDiscreteScheduler,
+    LMSDiscreteScheduler,
+    KDPM2DiscreteScheduler,
+    KDPM2AncestralDiscreteScheduler,
+    DPMSolverSinglestepScheduler,
+    DPMSolverSDEScheduler,
+    UniPCMultistepScheduler,
+)
 from PIL import Image
 import torch
+import torch.nn.functional as F
 
 # Use our new upscaler implementation
-from .upscalers import upscale_image
+from diffusionapi.upscalers import upscale_image
 
 # NEW: Real‑ESRGAN support for colour‑safe AnimeSharp & friends
 # from realesrgan import RealESRGANer
@@ -26,22 +44,14 @@ from .upscalers import upscale_image
 import numpy as np
 
 # Import the new metadata module
-from .metadata import create_infotext, save_image_with_metadata
+from diffusionapi.metadata import create_infotext, save_image_with_metadata
 
-###############################################################################
-# Utilities
-###############################################################################
+# Import the new memory configuration system
+from diffusionapi.memory_config import get_optimal_settings_for_memory
 
-log_path = Path("generation.log")
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s",
-    handlers=[
-        logging.FileHandler(log_path),
-        logging.StreamHandler()
-    ]
-)
-logger = logging.getLogger(__name__)
+# Configure logging
+logging.set_verbosity_info()
+logger = logging.get_logger(__name__)
 
 # Load environment variables
 env_path = Path(__file__).parent.parent / ".env"
@@ -51,18 +61,17 @@ LORAS_DIR = os.getenv("LORAS_DIR", "stable_diffusion/Lora")
 UPSCALERS_DIR = os.getenv("UPSCALERS_DIR", "stable_diffusion/upscalers")
 
 SCHEDULERS = {
-    "karras": "Karras",
-    "automatic": "Automatic",
-    "uniform": "Uniform",
-    "exponential": "Exponential",
-    "polyexponential": "Polyexponential",
-    "sgm": "SGM Uniform",
-    "kl": "KL Optimal",
-    "align": "Align Your Steps",
-    "simple": "Simple",
-    "normal": "Normal",
-    "ddim": "DDIM",
-    "beta": "Beta"
+    "dpm++": DPMSolverMultistepScheduler,
+    "euler": EulerDiscreteScheduler,
+    "euler_a": EulerAncestralDiscreteScheduler,
+    "heun": HeunDiscreteScheduler,
+    "lms": LMSDiscreteScheduler,
+    "dpm2": KDPM2DiscreteScheduler,
+    "dpm2_a": KDPM2AncestralDiscreteScheduler,
+    "dpm++_sde": DPMSolverSDEScheduler,
+    "dpm_fast": DPMSolverSinglestepScheduler,
+    "lcm": UniPCMultistepScheduler,
+    "karras": DPMSolverMultistepScheduler,
 }
 
 def is_huggingface_model(model_name: str) -> bool:
@@ -356,12 +365,32 @@ def main() -> None:
     # ------------------------------------------------------------------
     # 2.  Device & dtype
     # ------------------------------------------------------------------
-    device = (
-        "cuda" if torch.cuda.is_available() else
-        "mps" if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available() else
-        "cpu"
-    )
-    dtype = torch.float16 if device != "cpu" else torch.float32
+    # Smart device detection: CUDA for NVIDIA GPUs, CPU for Apple Silicon
+    if torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.float16
+        logger.info("==> CUDA available, using NVIDIA GPU")
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        # For Apple Silicon, use CPU to avoid MPS compatibility issues
+        device = "cpu"
+        dtype = torch.float32
+        logger.info("==> Apple Silicon detected, using CPU for compatibility")
+    else:
+        device = "cpu"
+        dtype = torch.float32
+        logger.info("==> No GPU available, using CPU")
+    
+    # Log system memory information
+    system_memory = get_system_memory_gb()
+    available_memory = get_available_memory_gb()
+    logger.info(f"==> System memory: {system_memory:.1f}GB total, {available_memory:.1f}GB available")
+    logger.info(f"==> Using device: {device} with dtype: {dtype}")
+    
+    # Validate image size for memory constraints
+    original_width, original_height = width, height
+    width, height = validate_image_size_for_memory(width, height, device, model_name)
+    if (width, height) != (original_width, original_height):
+        logger.info(f"==> Image size adjusted from {original_width}x{original_height} to {width}x{height}")
 
     update_progress_file(job_id, {"status": "loading", "progress": 0.0})
 
@@ -372,6 +401,9 @@ def main() -> None:
     logger.info(f"==> Loading model: {model_name}")
     logger.info(f"==> Model path: {model_id}")
     logger.info(f"==> Job type: {job_type}")
+    
+    # Clean up memory before loading pipeline
+    cleanup_memory()
     
     # Try to determine if this should be an SDXL model
     should_be_sdxl = is_sdxl_model(model_name)
@@ -557,6 +589,84 @@ def main() -> None:
             pipe.refiner = refiner
             pipe.refiner_inference_steps = int(steps * (1 - switch_at))
 
+    # Move pipeline to device with proper error handling
+    try:
+        pipe = pipe.to(device)
+        
+        # Ensure all components are on the correct device (except scheduler which doesn't support .to())
+        if hasattr(pipe, 'text_encoder'):
+            pipe.text_encoder = pipe.text_encoder.to(device)
+        if hasattr(pipe, 'text_encoder_2'):
+            pipe.text_encoder_2 = pipe.text_encoder_2.to(device)
+        if hasattr(pipe, 'vae'):
+            pipe.vae = pipe.vae.to(device)
+        if hasattr(pipe, 'unet'):
+            pipe.unet = pipe.unet.to(device)
+        # Note: scheduler doesn't support .to() method, so we skip it
+        
+        logger.info("==> Pipeline ready on %s with scheduler %s", device, pipe.scheduler.__class__.__name__)
+    except Exception as e:
+        logger.warning(f"Failed to move pipeline to {device}: {e}")
+        if device == "cuda":
+            logger.info("==> CUDA failed, falling back to CPU")
+            device = "cpu"
+            dtype = torch.float32
+            
+            # Reload pipeline with float32 for CPU compatibility
+            logger.info("==> Reloading pipeline with float32 for CPU compatibility")
+            try:
+                if job_type == "img2img":
+                    if pipeline_type == "sdxl_img2img":
+                        pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                            model_id,
+                            torch_dtype=torch.float32,  # Use float32 for CPU
+                            use_safetensors=True,
+                            safety_checker=None
+                        )
+                    else:
+                        pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                            model_id,
+                            torch_dtype=torch.float32,  # Use float32 for CPU
+                            use_safetensors=True,
+                            safety_checker=None
+                        )
+                else:
+                    if pipeline_type == "sdxl":
+                        pipe = StableDiffusionXLPipeline.from_pretrained(
+                            model_id,
+                            torch_dtype=torch.float32,  # Use float32 for CPU
+                            use_safetensors=True,
+                            safety_checker=None
+                        )
+                    else:
+                        pipe = StableDiffusionPipeline.from_pretrained(
+                            model_id,
+                            torch_dtype=torch.float32,  # Use float32 for CPU
+                            use_safetensors=True,
+                            safety_checker=None
+                        )
+                
+                # Move to CPU
+                pipe = pipe.to(device)
+                if hasattr(pipe, 'text_encoder'):
+                    pipe.text_encoder = pipe.text_encoder.to(device)
+                if hasattr(pipe, 'text_encoder_2'):
+                    pipe.text_encoder_2 = pipe.text_encoder_2.to(device)
+                if hasattr(pipe, 'vae'):
+                    pipe.vae = pipe.vae.to(device)
+                if hasattr(pipe, 'unet'):
+                    pipe.unet = pipe.unet.to(device)
+                
+                logger.info("==> Pipeline reloaded and moved to CPU with float32")
+            except Exception as reload_error:
+                logger.error(f"Failed to reload pipeline for CPU: {reload_error}")
+                raise reload_error
+        else:
+            raise e
+
+    # Apply memory optimizations
+    optimize_pipeline_for_memory(pipe, device, model_name)
+
     # ------------------------------------------------------------------
     # 4.  Scheduler selection (quick heuristic)
     # ------------------------------------------------------------------
@@ -617,9 +727,6 @@ def main() -> None:
             )
     except Exception as e:
         logger.warning("[!] Scheduler selection failed (%s). Falling back to default.", e)
-
-    pipe = pipe.to(device)
-    logger.info("==> Pipeline ready on %s with scheduler %s", device, pipe.scheduler.__class__.__name__)
 
     # ------------------------------------------------------------------
     # 5.  Callback to update progress
@@ -682,6 +789,70 @@ def main() -> None:
             logger.info("==> Standard txt2img generation (no hires)")
             
         generator = torch.Generator(device=device).manual_seed(seed)
+        logger.info(f"==> Created generator on device: {device}")
+        
+        # If we're using CUDA, test it and fallback to CPU if needed
+        if device == "cuda":
+            try:
+                # Test if CUDA is working by creating a small tensor
+                test_tensor = torch.zeros(1, device=device)
+                logger.info("==> CUDA device test successful")
+            except Exception as e:
+                logger.warning(f"CUDA device test failed: {e}")
+                logger.info("==> Falling back to CPU due to CUDA issues")
+                device = "cpu"
+                dtype = torch.float32
+                generator = torch.Generator(device=device).manual_seed(seed)
+                
+                # Reload pipeline with float32 for CPU compatibility
+                logger.info("==> Reloading pipeline with float32 for CPU compatibility")
+                try:
+                    if job_type == "img2img":
+                        if pipeline_type == "sdxl_img2img":
+                            pipe = StableDiffusionXLImg2ImgPipeline.from_pretrained(
+                                model_id,
+                                torch_dtype=torch.float32,  # Use float32 for CPU
+                                use_safetensors=True,
+                                safety_checker=None
+                            )
+                        else:
+                            pipe = StableDiffusionImg2ImgPipeline.from_pretrained(
+                                model_id,
+                                torch_dtype=torch.float32,  # Use float32 for CPU
+                                use_safetensors=True,
+                                safety_checker=None
+                            )
+                    else:
+                        if pipeline_type == "sdxl":
+                            pipe = StableDiffusionXLPipeline.from_pretrained(
+                                model_id,
+                                torch_dtype=torch.float32,  # Use float32 for CPU
+                                use_safetensors=True,
+                                safety_checker=None
+                            )
+                        else:
+                            pipe = StableDiffusionPipeline.from_pretrained(
+                                model_id,
+                                torch_dtype=torch.float32,  # Use float32 for CPU
+                                use_safetensors=True,
+                                safety_checker=None
+                            )
+                    
+                    # Move to CPU
+                    pipe = pipe.to(device)
+                    if hasattr(pipe, 'text_encoder'):
+                        pipe.text_encoder = pipe.text_encoder.to(device)
+                    if hasattr(pipe, 'text_encoder_2'):
+                        pipe.text_encoder_2 = pipe.text_encoder_2.to(device)
+                    if hasattr(pipe, 'vae'):
+                        pipe.vae = pipe.vae.to(device)
+                    if hasattr(pipe, 'unet'):
+                        pipe.unet = pipe.unet.to(device)
+                    
+                    logger.info("==> Pipeline reloaded and moved to CPU with float32")
+                except Exception as reload_error:
+                    logger.error(f"Failed to reload pipeline for CPU: {reload_error}")
+                    raise reload_error
         
         if job_type == "img2img" and input_image is not None:
             # For img2img, use the dedicated img2img pipeline
@@ -784,6 +955,8 @@ def main() -> None:
                     img2img_pipe = img2img_pipe.to(device)
                     # Copy scheduler from main pipeline
                     img2img_pipe.scheduler = pipe.scheduler
+                    # Apply memory optimizations
+                    optimize_pipeline_for_memory(img2img_pipe, device, model_name)
                     logger.info(f"==> Created SDXL img2img pipeline for initial generation")
                 else:
                     # Create standard SD img2img pipeline for initial generation
@@ -796,6 +969,8 @@ def main() -> None:
                     img2img_pipe = img2img_pipe.to(device)
                     # Copy scheduler from main pipeline
                     img2img_pipe.scheduler = pipe.scheduler
+                    # Apply memory optimizations
+                    optimize_pipeline_for_memory(img2img_pipe, device, model_name)
                     logger.info(f"==> Created standard SD img2img pipeline for initial generation")
                 
                 # Load LoRAs into the img2img pipeline
@@ -1073,6 +1248,9 @@ def main() -> None:
     
     update_progress_file(job_id, progress_data)
 
+    # Clean up memory after generation
+    cleanup_memory()
+    
     logger.info("==> Job %s finished in %.2fs (mem %.1f → %.1f MB)", job_id, elapsed_time, memory_before, memory_after)
 
 
@@ -1219,6 +1397,203 @@ def load_loras(pipeline, loras: List[Dict[str, Any]], model_name: str = "") -> N
     if not successful_loras and failed_loras:
         logger.warning(f"==> No LoRAs were successfully loaded. Generation will proceed without LoRAs.")
 
+
+def get_system_memory_gb() -> float:
+    """Get total system memory in GB."""
+    return psutil.virtual_memory().total / (1024**3)
+
+def get_available_memory_gb() -> float:
+    """Get available system memory in GB."""
+    return psutil.virtual_memory().available / (1024**3)
+
+def is_apple_silicon() -> bool:
+    """Check if running on Apple Silicon."""
+    return (
+        hasattr(torch.backends, "mps") and 
+        torch.backends.mps.is_available() and
+        torch.backends.mps.is_built()
+    )
+
+def get_optimal_image_size_for_memory(device: str, model_name: str) -> tuple[int, int]:
+    """Get optimal image size based on available memory and device."""
+    available_memory = get_available_memory_gb()
+    settings = get_optimal_settings_for_memory(available_memory, device)
+    return settings["max_image_size"]
+
+def optimize_pipeline_for_memory(pipe, device: str, model_name: str) -> None:
+    """Apply memory optimization techniques to the pipeline (WebUI-like)."""
+    available_memory = get_available_memory_gb()
+    settings = get_optimal_settings_for_memory(available_memory, device)
+    optimizations = settings["optimizations"]
+    device_settings = settings["device_settings"]
+    
+    logger.info(f"==> Applying WebUI-like memory optimizations for device: {device} (memory level: {settings['memory_level']})")
+    
+    # Enable VAE tiling for all devices to reduce memory usage (WebUI default)
+    if optimizations["enable_vae_tiling"] and hasattr(pipe, 'enable_vae_tiling'):
+        pipe.enable_vae_tiling()
+        logger.info("==> Enabled VAE tiling (WebUI-like)")
+    
+    # Enable VAE slicing for better memory management (WebUI technique)
+    if optimizations["enable_vae_slicing"] and hasattr(pipe, 'enable_vae_slicing'):
+        pipe.enable_vae_slicing()
+        logger.info("==> Enabled VAE slicing (WebUI-like)")
+    
+    # Enable attention slicing for memory efficiency (WebUI default)
+    if optimizations["enable_attention_slicing"] and hasattr(pipe, 'enable_attention_slicing'):
+        pipe.enable_attention_slicing()
+        logger.info("==> Enabled attention slicing (WebUI-like)")
+    
+    # Enable memory efficient attention (WebUI uses xformers)
+    if optimizations["enable_memory_efficient_attention"] and hasattr(pipe, 'enable_memory_efficient_attention'):
+        try:
+            pipe.enable_memory_efficient_attention()
+            logger.info("==> Enabled memory efficient attention (WebUI-like)")
+        except Exception as e:
+            logger.warning(f"Failed to enable memory efficient attention: {e}")
+    
+    # Enable xformers memory efficient attention (WebUI default)
+    if optimizations["enable_xformers_memory_efficient_attention"]:
+        try:
+            pipe.enable_xformers_memory_efficient_attention()
+            logger.info("==> Enabled xformers memory efficient attention (WebUI-like)")
+        except Exception as e:
+            logger.warning(f"Failed to enable xformers memory efficient attention: {e}")
+    
+    # Enable gradient checkpointing (WebUI optimization)
+    if optimizations["enable_gradient_checkpointing"] and hasattr(pipe, 'enable_gradient_checkpointing'):
+        try:
+            pipe.enable_gradient_checkpointing()
+            logger.info("==> Enabled gradient checkpointing (WebUI-like)")
+        except Exception as e:
+            logger.warning(f"Failed to enable gradient checkpointing: {e}")
+    
+    # Enable model CPU offload for Apple Silicon (WebUI technique)
+    if optimizations["enable_model_cpu_offload"] and device == "mps" and hasattr(pipe, 'enable_model_cpu_offload'):
+        try:
+            pipe.enable_model_cpu_offload()
+            logger.info("==> Enabled model CPU offload (WebUI-like)")
+        except Exception as e:
+            logger.warning(f"Failed to enable model CPU offload: {e}")
+    
+    # Enable model offloading (WebUI technique)
+    if optimizations["enable_model_offload"] and hasattr(pipe, 'enable_model_offload'):
+        try:
+            pipe.enable_model_offload()
+            logger.info("==> Enabled model offload (WebUI-like)")
+        except Exception as e:
+            logger.warning(f"Failed to enable model offload: {e}")
+    
+    # Enable sequential CPU offload for very memory-constrained systems
+    if optimizations["enable_sequential_cpu_offload"] and device == "mps" and available_memory < 8:
+        if hasattr(pipe, 'enable_sequential_cpu_offload'):
+            try:
+                pipe.enable_sequential_cpu_offload()
+                logger.info("==> Enabled sequential CPU offload (WebUI-like)")
+            except Exception as e:
+                logger.warning(f"Failed to enable sequential CPU offload: {e}")
+    
+    # For SDXL models, enable additional optimizations
+    if "sdxl" in model_name.lower() or hasattr(pipe, 'text_encoder_2'):
+        # Enable attention processor (WebUI technique)
+        if optimizations["enable_attention_processor"]:
+            try:
+                # Set attention processor for better memory management
+                from diffusers.models.attention_processor import AttnProcessor2_0
+                pipe.unet.set_attn_processor(AttnProcessor2_0())
+                logger.info("==> Enabled attention processor (WebUI-like)")
+            except Exception as e:
+                logger.warning(f"Failed to enable attention processor: {e}")
+        
+        # For SDXL on Apple Silicon, use more aggressive optimizations
+        if device == "mps":
+            # Don't reduce VAE sample size for better quality (WebUI approach)
+            if optimizations["reduce_vae_sample_size"] and hasattr(pipe, 'vae') and hasattr(pipe.vae, 'config'):
+                pipe.vae.config.sample_size = 64  # Reduce VAE sample size
+                logger.info("==> Reduced VAE sample size for memory optimization")
+    
+    # Set device-specific optimizations
+    if device == "mps":
+        # Apple Silicon specific optimizations
+        logger.info(f"==> Applied Apple Silicon optimizations (tile_size: {device_settings['tile_size']})")
+    elif device == "cuda":
+        # CUDA specific optimizations
+        logger.info(f"==> Applied CUDA optimizations (tile_size: {device_settings['tile_size']})")
+    
+    logger.info(f"==> Memory optimizations complete - ready for large image generation")
+
+def cleanup_memory() -> None:
+    """Force garbage collection and clear CUDA/MPS cache."""
+    gc.collect()
+    
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize()
+    
+    if is_apple_silicon():
+        # Clear MPS cache if available
+        try:
+            torch.mps.empty_cache()
+        except:
+            pass
+
+def calculate_optimal_tile_size(image_width: int, image_height: int, device: str, available_memory: float) -> tuple[int, int]:
+    """Calculate optimal tile size for large image generation (WebUI-like)."""
+    settings = get_optimal_settings_for_memory(available_memory, device)
+    device_settings = settings["device_settings"]
+    
+    base_tile_size = device_settings["tile_size"]
+    max_tile_size = device_settings["max_tile_size"]
+    
+    # Calculate total pixels
+    total_pixels = image_width * image_height
+    
+    # For very large images, use smaller tiles
+    if total_pixels > 2048 * 2048:  # 4MP
+        tile_size = min(base_tile_size // 2, 256)
+    elif total_pixels > 1024 * 1024:  # 1MP
+        tile_size = base_tile_size
+    else:
+        tile_size = min(max_tile_size, base_tile_size * 2)
+    
+    # Ensure tile size is multiple of 8
+    tile_size = round_to_multiple_of_8(tile_size)
+    
+    return tile_size, device_settings["tile_overlap"]
+
+def validate_image_size_for_memory(width: int, height: int, device: str, model_name: str) -> tuple[int, int]:
+    """Validate and potentially reduce image size to prevent memory issues (WebUI-like)."""
+    available_memory = get_available_memory_gb()
+    settings = get_optimal_settings_for_memory(available_memory, device)
+    max_width, max_height = settings["max_image_size"]
+    
+    # Calculate total pixels
+    total_pixels = width * height
+    max_pixels = max_width * max_height
+    
+    # For very large images, use tiling instead of reducing size (WebUI approach)
+    if total_pixels > max_pixels * 2:  # If image is more than 2x the max, then reduce
+        # Calculate scaling factor to fit within memory limits
+        scale_factor = (max_pixels / total_pixels) ** 0.5
+        new_width = int(width * scale_factor)
+        new_height = int(height * scale_factor)
+        
+        # Round to multiple of 8
+        new_width = round_to_multiple_of_8(new_width)
+        new_height = round_to_multiple_of_8(new_height)
+        
+        logger.warning(f"==> Image size {width}x{height} too large for available memory ({available_memory:.1f}GB)")
+        logger.warning(f"==> Reducing to {new_width}x{new_height} to prevent memory issues")
+        logger.info(f"==> Memory level: {settings['memory_level']}")
+        
+        return new_width, new_height
+    elif total_pixels > max_pixels:  # If image is larger than max but not too much, use tiling
+        logger.info(f"==> Image size {width}x{height} exceeds recommended size, will use tiling")
+        logger.info(f"==> Memory level: {settings['memory_level']}")
+        # Don't reduce size, let tiling handle it
+        return width, height
+    
+    return width, height
 
 if __name__ == "__main__":
     main()
